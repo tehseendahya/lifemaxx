@@ -101,9 +101,29 @@ use); bumping a route is a one-line change.
 assembles goals and history first and the question last, and `stableJson()`
 sorts keys. Break that ordering and you silently pay full price all session.
 
+## Optional extras
+
+Both are wired up and will start working the moment you add credentials.
+
+**Strava** — create an app at [strava.com/settings/api](https://www.strava.com/settings/api),
+set `STRAVA_CLIENT_ID` and `STRAVA_CLIENT_SECRET`, then hit **Connect** in
+Settings. Activities pull nightly.
+
+**Push notifications** — generate keys once:
+
+```bash
+npx web-push generate-vapid-keys
+```
+
+Put them in `NEXT_PUBLIC_VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY`, set
+`CRON_SECRET` to any random string, then enable in Settings. `vercel.json`
+already schedules the nightly verdict, Sunday review and Strava sync.
+
+> On iOS, push only reaches home-screen installs. The Settings screen says so
+> rather than failing silently if you're in a Safari tab.
+
 ## What still needs doing
 
-- [ ] Strava OAuth + nightly activity pull
-- [ ] Nightly and weekly digest crons, and web-push delivery
 - [ ] IndexedDB outbox for fully offline set logging (the UI is ready for it)
 - [ ] Row-level security policies (single-user today; needed before sharing)
+- [ ] Meal "repeat" shortcut for frequently-eaten meals

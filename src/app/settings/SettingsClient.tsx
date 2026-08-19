@@ -3,12 +3,13 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Screen, Card, Label, Button, Stat } from "@/components/ui";
 import { MIN_WEIGH_INS } from "@/lib/domain/tdee";
+import { Integrations } from "@/components/Integrations";
 
 type Tdee =
   | { status: "insufficient_data"; weighIns: number; needed: number }
   | { status: "ok"; tdee: number; marginKcal: number; trendKgPerWeek: number; currentKg: number; meanIntake: number; weighIns: number };
 
-export function SettingsClient({ goalsText, email, currentWeightLb, tdee, proposals, gyms, weighInCount }: {
+export function SettingsClient({ goalsText, email, currentWeightLb, tdee, proposals, gyms, weighInCount, stravaConnected }: {
   goalsText: string;
   email: string;
   currentWeightLb: number | null;
@@ -16,6 +17,7 @@ export function SettingsClient({ goalsText, email, currentWeightLb, tdee, propos
   proposals: { cut: number; maintain: number; bulk: number } | null;
   gyms: { id: string; name: string; equipmentNotes: string }[];
   weighInCount: number;
+  stravaConnected: boolean;
 }) {
   const router = useRouter();
   const [goals, setGoals] = useState(goalsText);
@@ -122,6 +124,8 @@ export function SettingsClient({ goalsText, email, currentWeightLb, tdee, propos
           </p>
         )}
       </Card>
+
+      <Integrations stravaConnected={stravaConnected} />
 
       <Card>
         <Label>Gyms</Label>

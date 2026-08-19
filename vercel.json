@@ -1,0 +1,7 @@
+{
+  "crons": [
+    { "path": "/api/cron/nightly", "schedule": "0 1 * * *" },
+    { "path": "/api/cron/weekly", "schedule": "0 22 * * 0" },
+    { "path": "/api/cron/strava", "schedule": "0 7 * * *" }
+  ]
+}
