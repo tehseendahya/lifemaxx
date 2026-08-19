@@ -73,7 +73,7 @@ Next.js 15 (App Router, TS)      — one app, phone + laptop
 Tailwind + shadcn/ui             — fast, looks fine, dark by default
 Supabase Postgres + Auth         — data + magic-link login, RLS on user_id
 Drizzle ORM                      — typed queries + migrations in git
-Anthropic SDK (claude-opus-5)    — vision, NL parsing, coach
+OpenAI SDK (gpt-5.6 family)      — vision, NL parsing, coach
 Web Push (VAPID) + Vercel Cron   — nightly digest, coach nudges
 Dexie (IndexedDB)                — offline outbox + cached exercise history
 Recharts                         — trend lines
@@ -125,13 +125,12 @@ sets(id, workout_id, exercise_id, set_index,
      to_failure bool, is_warmup bool,
      rest_s null,                              -- measured from previous set save
      note,                                     -- "left shoulder pinched on set 3"
+     felt null,                                -- weak | normal | strong, optional
      e1rm_kg generated,                        -- Epley: w * (1 + reps/30)
      raw_text, logged_at)
 
 session_messages(id, workout_id, role, content, created_at)   -- the in-session chat
 
-muscle_readiness(user_id, muscle, local_date,  -- optional self-report
-                 soreness)                     -- 0-3, tapped on the homepage
 
 -- CARDIO / EXTERNAL
 activities(id, user_id, external_id, provider,  -- strava|manual|healthkit
@@ -143,6 +142,12 @@ activities(id, user_id, external_id, provider,  -- strava|manual|healthkit
 body_metrics(id, user_id, local_date, weight_kg,
              body_fat_pct null, steps null, sleep_min null,
              resting_hr null, source)
+
+-- PROFILE & GOALS
+profile(user_id, goals_text,                   -- free text, you write it, injected
+        height_cm, birth_year, sex,            -- for sanity bounds only
+        updated_at)
+goal_history(id, user_id, goals_text, effective_from)   -- what you were chasing, when
 
 -- COACH
 daily_summaries(id, user_id, local_date,
@@ -247,12 +252,18 @@ Each muscle gets a readiness score from three inputs:
 ```
 days since last trained   (recovery, 48-72h typical)
 sets in last 7d vs target range   (under-worked ranks up)
-self-reported soreness    (optional, tapped on the homepage)
+last-session performance  (did the lift move as expected?)
 ```
 
 Ranked ascending, so the homepage opens with *"Back and rear delts — both under 8 sets this week, last hit 5 days ago."*
 
-**One honest caveat:** soreness is not something the app can measure. It can compute *recovery time* and *volume debt* from data you're already producing, and those two carry most of the signal. If you want soreness in the mix it has to be a tap — a 4-state chip per muscle group, five seconds on the homepage. Worth including as optional; not worth blocking the feature on.
+**No soreness tap — recommendation, and why.** I'd leave it out. Three reasons:
+
+1. It's a second daily ritual on top of weigh-in and logging, and the third ritual is always the one that decays.
+2. **Soreness is a bad proxy for readiness.** DOMS tracks novelty more than fatigue — it's loudest when you do something unfamiliar and fades as you adapt, which means it goes quiet exactly when you're training hard enough to need the signal.
+3. Recovery time and volume debt already carry most of it, and they cost you nothing to collect.
+
+**Instead, capture readiness where you're already tapping.** An optional three-state chip on the exercise, in-session: *felt weak / normal / strong*. It's performance-anchored rather than sensation-anchored, it's one tap inside a screen you're already on, and it feeds both the homepage ranking and the in-session coach. If you never tap it, nothing breaks.
 
 #### Text entry still exists
 
@@ -299,30 +310,62 @@ Rule: **every notification must be actionable or it gets ignored.** "You ate 1,8
 Log body weight most mornings. Then:
 
 ```
-TDEE ≈ (14-day mean intake) + (7,700 kcal/kg × weight-trend-per-day)
+TDEE ≈ (mean intake over window) + (7,700 kcal/kg × weight-trend-per-day)
 ```
 
-Using an exponentially-smoothed weight trend, not raw daily weights (daily fluctuation is water and is meaningless).
+This gives you a **measured** maintenance number instead of a calculator's guess. It also *cancels out systematic logging error*: if the vision model reads your meals 15% low every day, your computed TDEE comes out 15% low too, and the target it sets is still correct.
 
-This gives you a **measured** maintenance number instead of a calculator's guess, and it recalibrates weekly as you get leaner. It also *cancels out systematic logging error*: if the vision model consistently reads your meals 15% low, your computed TDEE comes out 15% low too, and the target it sets is still correct.
+**Built for 2–3 weigh-ins a week, not daily.** This is the part most apps get wrong, and it's a real change to the math:
 
-It's ~30 lines of code and it's the difference between a food diary and something that actually steers.
+| | Naive version | What we build |
+|---|---|---|
+| Trend | exponential moving average | **linear regression on (date, weight)** |
+| Window | 14 days | **28 days** |
+| Minimum data | none | **≥8 weigh-ins in the window**, else no number is shown |
+| Recompute | weekly | **fortnightly** |
+| Output | a single number | **a number with a range** |
 
-**Calibration mode — the first two weeks.** Since the goal is undecided, the app should not make you pick one on day one. A calculator's guess at your maintenance would be wrong by 200-400 kcal, and you'd anchor on it anyway.
+The regression swap is the important one. An EMA silently assumes evenly spaced samples — feed it Monday, Thursday, Sunday and it weights them as if they were consecutive, which biases the trend toward whichever day you happen to weigh in most. Least-squares on actual dates doesn't care about spacing, and it hands you a standard error for free, which becomes the range.
+
+**Below the threshold the app says so rather than guessing.** Under 8 weigh-ins in the window it shows *"not enough weigh-ins for a reliable number — 5 of 8"* and keeps the previous target. Same rule as the coach: don't manufacture confidence you don't have.
+
+It's still under a hundred lines, and it's the difference between a food diary and something that actually steers.
+
+**Calibration mode — the first three weeks.** Since the goal is undecided, the app should not make you pick one on day one. A calculator's guess at your maintenance would be wrong by 200-400 kcal, and you'd anchor on it anyway. At 2–3 weigh-ins a week, three weeks is what it takes to clear the 8-sample threshold with room to spare.
 
 Instead:
 
-| | Days 1–14 | Day 14 onward |
+| | Days 1–21 | Day 21 onward |
 |---|---|---|
 | Targets | **Protein only.** No calorie target shown, nothing marked pass/fail. | Real targets, derived from your measured TDEE. |
 | Coach talks about | Logging consistency, protein, training. | Everything, against real numbers. |
 | Weight | Logged daily, trend building silently. | Drives the target each week. |
 
-On day 14 the app has a measured maintenance number and proposes: *"Your maintenance is ~2,610. Cut at 2,150, maintain at 2,600, or lean bulk at 2,850?"* You pick once, with real data, and `targets` gets its first row. Mode is switchable any time after that and the history is preserved.
+On day 21 the app has a measured maintenance number and proposes: *"Your maintenance is ~2,610. Cut at 2,150, maintain at 2,600, or lean bulk at 2,850?"* You pick once, with real data, and `targets` gets its first row. Mode is switchable any time after that and the history is preserved.
 
 Protein is the exception that's targeted from day one because it's the one number that's right regardless of goal (~1.6–2.2 g/kg bodyweight, cutting or bulking).
 
-### 5.6 Other things worth adding
+### 5.6 Goals — the part you write yourself
+
+One textarea in settings. You type what you're chasing, in your own words, and it goes into the system prompt of **every** LLM call — meal analysis, in-session coach, nightly verdict, weekly review.
+
+> *"Running prep — half marathon in the fall. Also want to add visible muscle size, especially shoulders and back. And abs."*
+
+Stored in `profile.goals_text`, versioned into `goal_history` so six months from now you can see what you were actually training for in August.
+
+Because it's short and stable, it lives at the very front of the prompt — which also means it sits inside the cached prefix and costs effectively nothing to include on every call.
+
+**Why free text beats a dropdown.** A goal picker gives you `cut | maintain | bulk`, which is one bit of information. What you wrote above contains a target event, a timeline, two specific muscle groups, and a body-composition goal. The model can use all of it. *"Especially shoulders and back"* directly changes what the homepage should rank up, and no enum captures that.
+
+**And it lets the coach do the one genuinely useful thing.** Your three goals are in tension — endurance running, hypertrophy, and getting lean pull against each other, and hard running plus hard lifting in the same 24 hours blunts both adaptations. A blunt-analyst coach that knows all three should say so:
+
+> *"You ran hard Tuesday and squatted hard Wednesday. That's the third week running you've stacked them. Pick one to move — probably the run, since the half is the dated goal."*
+
+That's the advice you can't get from a calorie app, and it's only possible because the goals are specific enough to conflict. **Naming the trade-off is the feature**, not a bug in the prompt.
+
+Goals get re-read on every call, so editing the textarea changes the coach's behaviour on the next question — no retraining, no settings migration.
+
+### 5.7 Other things worth adding
 
 **In scope, cheap, high value:**
 - Body weight — one tap, big number pad, morning reminder
@@ -342,35 +385,63 @@ Protein is the exception that's targeted from day one because it's the one numbe
 
 ---
 
-## 6. AI implementation
+## 6. AI implementation — OpenAI
 
-All calls use `claude-opus-5` (1M context, $5/$25 per MTok) with **strict tool schemas** so output is guaranteed-valid JSON, and adaptive thinking. Cost control comes from `output_config.effort`, not from downgrading models.
+All model calls go through the **OpenAI Node SDK** against the `gpt-5.6` family. Structured responses use **JSON-schema structured outputs with `strict: true`**, so every parse returns schema-valid JSON rather than prose you have to salvage.
 
-| Route | Effort | Shape |
+### Model per route
+
+| Route | Model | Why |
 |---|---|---|
-| `POST /api/meals/analyze` | `low` | image + note → `log_meal` tool → items[] with per-item macros + confidence |
-| `POST /api/sets/parse` | `low` | text + known-exercise list → `log_sets` tool → sets[] |
-| `POST /api/session/ask` | `medium` | live session + history, **cached prefix** → short answer, streamed |
-| `POST /api/session/suggest` | `medium` | exercise + session state → next-set proposal + one-line reason |
-| `POST /api/coach/chat` | `high` | 14d context + question → prose, streamed |
-| Cron nightly / weekly | `medium` | day or week rollup → 2–3 sentence verdict |
+| `POST /api/meals/analyze` | `gpt-5.6-sol` | Strongest vision in the family. This is the one place a wrong number compounds silently into your daily total, and the delta over Terra is about $2/month. |
+| `POST /api/sets/parse` | `gpt-5.6-luna` | Text → structured sets is a narrow extraction task. At $0.20/1M it's free. |
+| `POST /api/session/ask` | `gpt-5.6-terra` | Needs to be fast on 90 seconds of rest. Terra with a cached prefix is the right point on the curve. |
+| `POST /api/session/suggest` | `gpt-5.6-terra` | Same context, same latency budget. |
+| `POST /api/coach/chat` | `gpt-5.6-sol` | Open-ended reasoning across two weeks of data. Worth the flagship. |
+| Cron nightly / weekly | `gpt-5.6-terra` | Small input, short output, no latency pressure. |
 
-**Failure handling that matters:** if the parse call fails or you're offline, **save the raw text anyway** and mark it `needs_parse`. A background job retries later. You should never lose a log because a network call failed mid-set.
+The bare `gpt-5.6` alias routes to Sol. Pin the explicit IDs rather than the alias so a routing change upstream can't silently move your cost or behaviour.
 
-**Prompt caching is what makes the in-session coach affordable.** The session context — history, records, weekly volume, gym equipment — is ~15K tokens and completely stable for the whole workout. Write it to cache once at Start Lift, and every question after that reads it at a tenth the price. Six questions in a session cost roughly what one uncached question would.
+### Prompt caching is automatic — but only if you keep the prefix stable
 
-**Estimated cost** (~4 meals/day, 4 lifts/week at ~6 questions each, 1 coach chat/day):
+OpenAI caches automatically for prompts over ~1024 tokens and bills cached input at **10% of standard**. There's no `cache_control`, nothing to declare. But it's a *prefix* match, so it only pays off if you build the request in a disciplined order:
 
-| | per month |
-|---|---|
-| Meal vision, ×4/day | ~$3.00 |
-| Lift sessions — cache write + ~6 questions each | ~$3.40 |
-| Set parsing | ~$0.30 |
-| Nightly verdict | ~$1.20 |
-| Coach chat, ×1/day | ~$3.00 |
-| **Total** | **~$11/mo** |
+```
+1. goals_text            ← stable for weeks
+2. system prompt         ← stable
+3. exercise history, records, weekly volume, gym equipment
+4. today's session so far ← grows during the workout
+5. the question          ← volatile
+```
 
-Hosting, database, and push are $0 on free tiers. Call it **under $15/month all-in** — and if the in-session coach turns out to be the part you actually use every day, that's the cheapest line on the list to let run.
+Stable content first, volatile content last, and never interpolate a timestamp or a freshly-serialized object with non-deterministic key order into the prefix. One byte of drift at position 2 invalidates everything after it and you silently pay full price all session. **Sort your JSON keys.**
+
+Done right, a lift session writes the ~15K-token prefix once and every subsequent question reads it at a tenth the price.
+
+### Failure handling
+
+If a parse call fails or you're offline, **save the raw text anyway** and mark it `needs_parse`. A background job retries. Nothing typed mid-set should ever evaporate because a request timed out.
+
+### Estimated cost
+
+At 4 meals/day, 4 lifts/week with ~6 questions each, and one coach chat a day:
+
+| | Model | per month |
+|---|---|---|
+| Meal vision, ×4/day | sol | ~$3.30 |
+| Lift sessions — prefix write + ~6 cached questions | terra | ~$1.30 |
+| Set parsing | luna | ~$0.05 |
+| Nightly verdict | terra | ~$0.30 |
+| Coach chat, ×1/day | sol | ~$3.00 |
+| **Total** | | **~$8/mo** |
+
+Hosting, database and push are $0 on free tiers. **Under $10/month all-in.**
+
+If that ever matters, the cheap lever is swapping meal vision to `gpt-5.6-terra` (saves ~$2/mo), not touching the coach — the coach is the part you'd actually miss.
+
+### One environment constraint
+
+`openai.com`, `platform.openai.com` and `developers.openai.com` are all blocked by this session's egress proxy. That does **not** affect the deployed app — Vercel calls OpenAI from its own servers. It only means I can't make live API calls from this container to verify the vision and parsing prompts end to end. Options in §9.
 
 ---
 
