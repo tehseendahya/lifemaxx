@@ -15,7 +15,8 @@
 | Object storage for photos? | **No.** | Photos are analyzed in-memory and discarded. Kills an entire layer of the stack (buckets, signed URLs, storage RLS, cleanup jobs). Optional: keep a 128px thumbnail (~6KB) inline in Postgres so the day-summary is visual. |
 | Strava via MCP? | **No — use the Strava REST API directly.** | MCP is a protocol for giving *a chat assistant* tools. Your web app should just call Strava's API. (An MCP server is still worth building *later*, pointed at your own DB — see §8.) |
 | Apple Health? | Via **Health Auto Export → webhook** | The web platform cannot read HealthKit. That $5 iOS app can POST steps/sleep/weight/HR to your API on a schedule. Cheapest possible bridge. |
-| Time to build | **~2 days for the core**, +1 for the extras | Phasing in §9. |
+| Progression suggestions | **AI proposes, bounded** | With RPE, to-failure and recovery in context there's real signal to reason over. Guardrails in §5.2: show the mechanical baseline alongside, cap the jump at one increment. |
+| Time to build | **~3 days**, usable after 2 | Phasing in §9. |
 
 ---
 
@@ -105,16 +106,32 @@ meal_items(id, meal_id, name, qty, unit,
            kcal, protein_g, carbs_g, fat_g)   -- editable line items
 
 -- TRAINING
-exercises(id, user_id null, name, canonical_slug,
-          muscle_group, equipment, is_unilateral)
-exercise_aliases(id, exercise_id, alias)      -- "bench","bp","barbell bench"
+gyms(id, user_id, name, lat, lng,
+     equipment_notes)                          -- "dumbbells only to 50lb, no SSB"
 
-workouts(id, user_id, started_at, ended_at, local_date, note, source)
+exercises(id, user_id null, name, canonical_slug, equipment, is_unilateral)
+exercise_aliases(id, exercise_id, alias)       -- "bench","bp","barbell bench"
+
+exercise_muscles(exercise_id, muscle,          -- chest|front_delt|tricep|lat|...
+                 contribution)                 -- 1.0 primary, 0.5 secondary
+
+workouts(id, user_id, gym_id, status,          -- active | completed | abandoned
+         started_at, ended_at, local_date,
+         name,                                 -- auto: "Push — Chest & Triceps"
+         bodyweight_kg null, note)
 
 sets(id, workout_id, exercise_id, set_index,
-     reps, weight_kg, rpe null, is_warmup bool,
+     reps, weight_kg, rpe null,
+     to_failure bool, is_warmup bool,
+     rest_s null,                              -- measured from previous set save
+     note,                                     -- "left shoulder pinched on set 3"
      e1rm_kg generated,                        -- Epley: w * (1 + reps/30)
-     raw_text)                                 -- what you actually typed
+     raw_text, logged_at)
+
+session_messages(id, workout_id, role, content, created_at)   -- the in-session chat
+
+muscle_readiness(user_id, muscle, local_date,  -- optional self-report
+                 soreness)                     -- 0-3, tapped on the homepage
 
 -- CARDIO / EXTERNAL
 activities(id, user_id, external_id, provider,  -- strava|manual|healthkit
@@ -162,44 +179,86 @@ Two things worth noticing:
 - **Text only** — "2 eggs, 3 strips bacon, black coffee" → same parser, no photo.
 - **Voice** — dictate, same parser.
 
-### 5.2 Training logging
+### 5.2 The lift session
 
-**Input is one text box per exercise.** You type or dictate:
+Lifting is not a form you fill in afterwards. It's a live session with a clock, and the app should behave like one — closer to Strava's record screen than to a spreadsheet.
 
-```
-bench 5x5 185
-squat 225x5, 245x3, 245x3 @rpe8
-pullups bw+25 for 8,8,6
-```
-
-Parsed to structured sets via a strict tool schema. Notation handled: `5x5` (sets×reps), `185x5` (weight×reps), comma-separated sets, `@rpe8`, `bw+25`, `2 warmups then 3 working`, lb/kg units, per-side dumbbell weights.
-
-**Exercise resolution** is the part that quietly breaks these apps. "bench", "bp", "barbell bench press", "flat bench" must all land on one row or your trend charts fragment into confetti. Approach:
-1. Exact match on `exercise_aliases`.
-2. Trigram fuzzy match (`pg_trgm`) above a threshold.
-3. Fall through to the model: *"which existing exercise is this, or is it new?"* — if new, it proposes a canonical name and you confirm once. The alias is saved, so you're only asked once per name.
-
-**The progressive-overload screen — the feature you actually asked for.** Tap any exercise, before you lift:
+**Lifecycle:**
 
 ```
-┌─ Barbell Bench Press ────────────────┐
-│ LAST — Tue Aug 12  (7 days ago)      │
-│   185 × 5    185 × 5    185 × 4      │
-│   e1RM 216 lb · volume 2,590 lb      │
-│                                      │
-│ TARGET TODAY  →  185 × 5,5,5         │
-│   you missed the 3rd set last time.  │
-│   close it out before adding weight. │
-│                                      │
-│ 8-WEEK e1RM   ▁▂▃▃▄▅▅▆   +7.4%       │
-│                                      │
-│ [ log a set ]  [ same as last time ] │
-└──────────────────────────────────────┘
+START LIFT  →  pick gym (defaults to last / nearest)  →  clock starts
+              ↓
+   for each exercise:
+     add set → reps · weight · RPE · [to failure] · note
+     ask     → "another set?"  "go up in weight?"  "shoulder feels off"
+              ↓
+STOP LIFT   →  duration · auto-name from muscles hit · session summary
 ```
 
-The target is a deterministic rule (hit all prescribed reps → +2.5–5lb or +1 rep; missed → repeat), with the AI only writing the one-line rationale. **Do not let the model invent the numbers** — you want progression to be boring and consistent, not creative.
+**What gets captured per set:** reps, weight, RPE, a `to_failure` flag, a free-text note, and `rest_s` measured automatically from the gap since the previous save. That last one is free data — you're already tapping — and rest length is a real input to whether the next set should go up.
 
-This whole screen is cached in IndexedDB on app open, so it works with zero signal.
+#### Durability — the one change I'd make to your flow
+
+You described writing the whole lift to the database on Stop. **Don't do that.** A session is 60–90 minutes, and iOS Safari evicts backgrounded tabs aggressively. One phone call, one low-battery shutdown, one accidental swipe and the entire workout is gone — including the part you'd already done.
+
+Keep the *feel* exactly as you described, but split durability from commit:
+
+| | When | Where |
+|---|---|---|
+| **Every set save** | instantly | IndexedDB, and pushed to Postgres if online |
+| **Session row** | on Start | created with `status = 'active'` |
+| **Stop Lift** | on tap | `status → 'completed'`, name + duration computed, summary shown |
+
+You still get one atomic-feeling session. But if the phone dies at exercise four, reopening the app finds an `active` workout and offers to resume it with everything already in place. A session left open more than ~6 hours gets auto-closed as `abandoned` at its last set time.
+
+#### The in-session coach
+
+This is the feature that makes the session model worth building. Between sets you ask, in plain language:
+
+> *"should I do another set?"*
+> *"go up in weight next week or add a rep?"*
+> *"shoulder's pinching on incline — swap to something?"*
+
+**Context it answers from:** the live session so far (every set already logged today, with RPE and failure flags), the last 3–5 sessions for these exercises, weekly set volume for the muscles involved, bodyweight trend and calorie balance, sleep and steps if connected, and the gym's `equipment_notes` so it never suggests a machine that isn't there.
+
+**Latency is the design constraint.** You're asking this on 90 seconds of rest. Two things make it fast:
+
+- **Cache the context prefix at Start Lift.** History, exercise records and targets are stable for the whole session — send them once with a cache breakpoint and every mid-session question is a small delta on a warm cache. Cheaper and materially faster.
+- **Prefetch on Start.** All of it comes down before you touch a barbell, so questions work with no signal.
+
+**Suggestions, with two guardrails.** The model proposes the progression — that's the right call now that it can see RPE, failure and recovery. But:
+
+1. **Show the mechanical baseline next to it.** "Rule says 185×5×3. I'd say 190×5×3 — last set was RPE 7 and you weren't near failure." When the AI deviates you can see it deviating, and why. That's what keeps it trustworthy over months.
+2. **Bound the jump.** No more than one standard increment or ~10% in a single step, whichever is smaller. Enthusiasm is not a training variable.
+
+#### Muscle accounting
+
+Every exercise maps to muscles with a weight — `bench → chest 1.0, front_delt 0.5, tricep 0.5`. A working set therefore contributes fractional **hard sets** to several muscles, which is the metric that actually matters for hypertrophy (most people want roughly 10–20 hard sets per muscle per week).
+
+That gives you two things for free:
+
+- **Auto-naming.** Rank muscles by hard sets in the session, name it accordingly — *"Push — Chest & Triceps"*, *"Pull — Back & Biceps"*, *"Legs"*. Falls back to *"Full Body"* when nothing dominates. Editable, and your edit is remembered for that shape of session.
+- **Weekly balance.** Sets per muscle per rolling 7 days, which is where you'll discover your rear delts have had four sets since March.
+
+#### Homepage: what to train next
+
+Each muscle gets a readiness score from three inputs:
+
+```
+days since last trained   (recovery, 48-72h typical)
+sets in last 7d vs target range   (under-worked ranks up)
+self-reported soreness    (optional, tapped on the homepage)
+```
+
+Ranked ascending, so the homepage opens with *"Back and rear delts — both under 8 sets this week, last hit 5 days ago."*
+
+**One honest caveat:** soreness is not something the app can measure. It can compute *recovery time* and *volume debt* from data you're already producing, and those two carry most of the signal. If you want soreness in the mix it has to be a tap — a 4-state chip per muscle group, five seconds on the homepage. Worth including as optional; not worth blocking the feature on.
+
+#### Text entry still exists
+
+Fast entry stays for when you don't want the session UI — type `bench 5x5 185` and it parses to sets through a strict tool schema. Notation handled: sets×reps, weight×reps, comma-separated sets, `@rpe8`, `bw+25`, lb/kg, per-side dumbbell weight. It writes into the active session if one is open, or creates a completed one if not.
+
+**Exercise resolution** is the part that quietly breaks these apps. "bench", "bp", "barbell bench press" and "flat bench" must all land on one row or your trend charts fragment into confetti. Exact alias match, then `pg_trgm` fuzzy match, then ask the model — and if it's genuinely new, it proposes a canonical name and muscle mapping you confirm once.
 
 ### 5.3 Cardio / Strava
 
@@ -292,22 +351,27 @@ All calls use `claude-opus-5` (1M context, $5/$25 per MTok) with **strict tool s
 |---|---|---|
 | `POST /api/meals/analyze` | `low` | image + note → `log_meal` tool → items[] with per-item macros + confidence |
 | `POST /api/sets/parse` | `low` | text + known-exercise list → `log_sets` tool → sets[] |
+| `POST /api/session/ask` | `medium` | live session + history, **cached prefix** → short answer, streamed |
+| `POST /api/session/suggest` | `medium` | exercise + session state → next-set proposal + one-line reason |
 | `POST /api/coach/chat` | `high` | 14d context + question → prose, streamed |
 | Cron nightly / weekly | `medium` | day or week rollup → 2–3 sentence verdict |
 
 **Failure handling that matters:** if the parse call fails or you're offline, **save the raw text anyway** and mark it `needs_parse`. A background job retries later. You should never lose a log because a network call failed mid-set.
 
-**Estimated cost at your volume** (~4 meals + 1 workout + 1 coach question/day):
+**Prompt caching is what makes the in-session coach affordable.** The session context — history, records, weekly volume, gym equipment — is ~15K tokens and completely stable for the whole workout. Write it to cache once at Start Lift, and every question after that reads it at a tenth the price. Six questions in a session cost roughly what one uncached question would.
 
-| | per day | per month |
-|---|---|---|
-| Meal vision ×4 | ~$0.10 | ~$3.00 |
-| Set parsing ×1 | ~$0.01 | ~$0.30 |
-| Nightly verdict | ~$0.04 | ~$1.20 |
-| Coach chat ×1 | ~$0.10 | ~$3.00 |
-| **Total** | | **~$8/mo** |
+**Estimated cost** (~4 meals/day, 4 lifts/week at ~6 questions each, 1 coach chat/day):
 
-Hosting, database, and push are $0 on free tiers. Call it **under $10/month all-in.**
+| | per month |
+|---|---|
+| Meal vision, ×4/day | ~$3.00 |
+| Lift sessions — cache write + ~6 questions each | ~$3.40 |
+| Set parsing | ~$0.30 |
+| Nightly verdict | ~$1.20 |
+| Coach chat, ×1/day | ~$3.00 |
+| **Total** | **~$11/mo** |
+
+Hosting, database, and push are $0 on free tiers. Call it **under $15/month all-in** — and if the in-session coach turns out to be the part you actually use every day, that's the cheapest line on the list to let run.
 
 ---
 
@@ -339,18 +403,18 @@ Where MCP *is* genuinely worth it: **build a small MCP server over your own data
 4. Today screen: totals vs target, meal list
 5. Deploy to Vercel, install to home screen on the phone
 
-**Day 2 — training + coach**
-6. Workout logging, NL set parsing, exercise resolution + aliases
-7. Exercise detail screen (last session, e1RM trend, target)
-8. Body weight entry + adaptive TDEE
-9. Coach chat over 14-day context
-10. Service worker, IndexedDB outbox, Web Push + VAPID
+**Day 2 — the lift session**
+6. Start/Stop session, gyms, per-set capture (reps, weight, RPE, to-failure, note)
+7. Exercise resolution + aliases, muscle mapping, auto-naming
+8. Exercise detail screen (last session, e1RM trend, suggestion + baseline)
+9. In-session coach with cached context prefix
+10. Service worker, IndexedDB outbox, crash-resume for active sessions
 
 **Day 3 — the rest**
-11. Strava OAuth + nightly pull
-12. Nightly + Sunday cron digests
-13. Trend charts, PR detection, export
-14. Polish: rest timer, repeat-meal, voice input
+11. Body weight + adaptive TDEE, calibration mode
+12. Weekly muscle balance + homepage "what to train next"
+13. Coach chat over 14-day context, nightly + Sunday digests, Web Push
+14. Strava OAuth + nightly pull, trend charts, PR detection, export
 
 Days 1–2 give you a genuinely usable app. Day 3 is upside.
 
