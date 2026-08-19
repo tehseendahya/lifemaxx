@@ -17,6 +17,8 @@
 | Strava via MCP? | **No — use the Strava REST API directly.** | MCP is a protocol for giving *a chat assistant* tools. Your web app should just call Strava's API. (An MCP server is still worth building *later*, pointed at your own DB — see §8.) |
 | Apple Health? | Via **Health Auto Export → webhook** | The web platform cannot read HealthKit. That $5 iOS app can POST steps/sleep/weight/HR to your API on a schedule. Cheapest possible bridge. |
 | Progression suggestions | **AI proposes, bounded** | With RPE, to-failure and recovery in context there's real signal to reason over. Guardrails in §5.2: show the mechanical baseline alongside, cap the jump at one increment. |
+| LLM provider | **OpenAI, `gpt-5.6` family** | Sol for vision and deep coaching, Terra for in-session, Luna for parsing. Per-route choices in §6. |
+| Training split | **App stays split-agnostic** | You decide at the gym, so it ranks muscles by debt rather than prescribing a day. My programming recommendation is §5.8 — advice, not something the app enforces. |
 | Time to build | **~3 days**, usable after 2 | Phasing in §9. |
 
 ---
@@ -385,6 +387,32 @@ Goals get re-read on every call, so editing the textarea changes the coach's beh
 
 ---
 
+### 5.8 Programming recommendation — Upper/Lower, 4 days
+
+You decide at the gym, so **the app will never prescribe a split.** It ranks muscles by debt and you pick. But you asked what I'd actually run, given running prep + size + abs:
+
+| Day | Lift | Run |
+|---|---|---|
+| Mon | Lower | — |
+| Tue | Upper | easy |
+| Wed | — | **hard / intervals** |
+| Thu | Lower | — |
+| Fri | Upper | easy |
+| Sat | — | **long run** |
+| Sun | — | — |
+
+Three reasons this beats the alternatives for you specifically:
+
+1. **PPL needs 5–6 days to hit everything twice.** Add runs and you're training seven days a week, and something gets dropped — usually the lifting. Upper/Lower covers everything twice in four days.
+2. **The interference effect is mostly legs.** Hard endurance work and hard lower-body lifting within ~24 hours blunt both adaptations. Parking the hard run on Wednesday leaves a full day either side of Monday/Thursday lower.
+3. **It survives improvisation.** Turn up, work out which of two buckets you're in, pick from whatever the homepage says is owed sets. That's a decision you can make in the doorway.
+
+**On abs:** don't program a separate ab day. Direct work 2–3× a week, five minutes bolted onto the end of upper days. Visibility is a body-fat outcome, not a volume outcome — that's the calorie side of the app's job, not the training side.
+
+**And the honest part:** your three goals compete. Half-marathon prep, hypertrophy and getting lean pull against each other, and you will not maximize all three at once. The coach's job (§5.6) is to tell you which one you traded against this week, not to pretend the plan optimizes all of them.
+
+---
+
 ## 6. AI implementation — OpenAI
 
 All model calls go through the **OpenAI Node SDK** against the `gpt-5.6` family. Structured responses use **JSON-schema structured outputs with `strict: true`**, so every parse returns schema-valid JSON rather than prose you have to salvage.
@@ -460,7 +488,7 @@ Non-negotiable, because gyms have concrete walls.
 
 Your web app should **not** talk to Strava through MCP. It should call Strava's REST API. MCP is a protocol for exposing tools to an AI *chat client*; putting it in the request path of your own app adds a hop and buys nothing.
 
-Where MCP *is* genuinely worth it: **build a small MCP server over your own database.** Then, from Claude Desktop or the Claude mobile app, you can ask ad-hoc questions your app's UI doesn't cover — *"correlate my squat e1RM with sleep from the last three months"* — without shipping a feature for every question. Read-only, a handful of query tools, maybe 150 lines. Great weekend follow-on, not day-one work.
+Where MCP *is* genuinely worth it: **build a small MCP server over your own database** — and note this is independent of the app running on OpenAI. MCP is a transport, not a vendor; a server over your health data can be consumed by any client that speaks it. Point one at it and you can ask ad-hoc questions your app's UI doesn't cover — *"correlate my squat e1RM with sleep from the last three months"* — without shipping a feature for every question. Read-only, a handful of query tools, maybe 150 lines. Great weekend follow-on, not day-one work.
 
 ---
 
@@ -488,6 +516,14 @@ Where MCP *is* genuinely worth it: **build a small MCP server over your own data
 
 Days 1–2 give you a genuinely usable app. Day 3 is upside.
 
+**On verifying the OpenAI calls.** Since every OpenAI domain is blocked from this build container (§6), I can write and typecheck the model code but can't exercise it live here. Three options, best first:
+
+1. **Allowlist `api.openai.com` for this environment** — then I test everything end to end as I build. Cleanest by a distance.
+2. **You run it locally** — I build against a provider interface with recorded fixtures, you drop your key into `.env.local` and `npm run dev`. First real call happens on your machine.
+3. **Deploy and test in a Vercel preview** — Vercel isn't behind this proxy, so a preview with the key set makes real calls. Slower loop, but it works.
+
+Either way the prompts and schemas get written and unit-tested against fixtures; only the live round-trip is affected.
+
 ---
 
 ## 10. Decided / open
@@ -496,17 +532,21 @@ Days 1–2 give you a genuinely usable app. Day 3 is upside.
 
 | | |
 |---|---|
-| **Units** | lb on screen and in every input; kg in the database. Plate math, increments and PRs all read in lb. |
+| **LLM provider** | OpenAI, `gpt-5.6` family. Per-route model choice in §6. |
+| **Goals** | Free-text, user-written, injected into every call (§5.6). |
+| **Weigh-ins** | 2–3/week. TDEE uses regression over a 28-day window with an 8-sample floor (§5.5). |
+| **Soreness tap** | Out. Replaced by an optional in-session *felt weak/normal/strong* chip (§5.2). |
+| **Split** | App stays agnostic and ranks by debt. Upper/Lower 4-day is programming advice only (§5.8). |
+| **Units** | lb on screen, kg in the database. |
 | **Photos** | Analyzed and discarded. No thumbnails, no object storage. |
 | **Strava** | In. OAuth plus a nightly pull on day 3. |
-| **Goal** | Undecided by design — two-week calibration, then the app proposes targets from measured TDEE (§5.5). |
+| **Calorie goal** | Undecided by design — three-week calibration, then proposed from measured TDEE (§5.5). |
 | **Coach tone** | Blunt analyst (§5.4). |
-| **Progression** | AI suggests, bounded, with the mechanical baseline shown alongside (§5.2). |
+| **Progression** | AI suggests, bounded, with the mechanical baseline alongside (§5.2). |
 | **Platform** | Installable PWA. Capacitor later only if HealthKit earns it. |
-| **Database** | Supabase Postgres. No object storage. |
+| **Database** | Supabase Postgres. |
 
 ### Still open
 
-1. **Weigh-in frequency** — adaptive TDEE degrades below ~4 mornings/week. Realistic for you, or should the math be built to tolerate gaps from the start?
-2. **Soreness tap** — include the optional 4-state chip per muscle group on the homepage, or rank purely on recovery time and volume debt?
-3. **Training split** — named program with fixed days, or decide at the gym? Changes whether the homepage proposes *today's session* or just ranks muscles.
+1. **How to verify OpenAI calls from this container** — allowlist `api.openai.com`, run locally, or test in a Vercel preview (§9).
+2. **Half-marathon date** — if there's a real one on the calendar, the coach can weight the running goal by proximity instead of treating all three as equally urgent.
