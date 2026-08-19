@@ -12,7 +12,8 @@
 | Native app or web? | **Installable PWA** (Next.js), not TestFlight | One codebase, ships today, no Xcode/Mac/App Review, instant updates. iOS home-screen PWAs get camera, offline, and **push notifications** (16.4+). TestFlight builds expire every 90 days and need a re-upload. |
 | Do I need a database? | **Yes. Postgres.** | Phone ↔ laptop sync is the whole point. Local-only storage (IndexedDB) can't do that, can't aggregate "bench e1RM over 6 weeks", and can't feed the coach. |
 | Which one? | **Supabase** (Postgres + Auth + cron) | Free tier covers this forever at 1 user. Auth is included (magic link), so you don't hand-roll sessions. Neon + Auth.js is the equivalent alternative. |
-| Object storage for photos? | **No.** | Photos are analyzed in-memory and discarded. Kills an entire layer of the stack (buckets, signed URLs, storage RLS, cleanup jobs). Optional: keep a 128px thumbnail (~6KB) inline in Postgres so the day-summary is visual. |
+| Object storage for photos? | **No — nothing kept.** | Photos are analyzed in memory and discarded, thumbnails included. Kills an entire layer of the stack: buckets, signed URLs, storage policies, cleanup jobs. |
+| Units | **lb on screen, kg in the database** | All display and entry in lb; storage stays metric so the math and any future export stay sane. One conversion at the edge. |
 | Strava via MCP? | **No — use the Strava REST API directly.** | MCP is a protocol for giving *a chat assistant* tools. Your web app should just call Strava's API. (An MCP server is still worth building *later*, pointed at your own DB — see §8.) |
 | Apple Health? | Via **Health Auto Export → webhook** | The web platform cannot read HealthKit. That $5 iOS app can POST steps/sleep/weight/HR to your API on a schedule. Cheapest possible bridge. |
 | Progression suggestions | **AI proposes, bounded** | With RPE, to-failure and recovery in context there's real signal to reason over. Guardrails in §5.2: show the mechanical baseline alongside, cap the jump at one increment. |
@@ -99,7 +100,6 @@ meals(id, user_id, eaten_at timestamptz, local_date date,
       kcal, protein_g, carbs_g, fat_g,
       source,                  -- photo|text|repeat|manual
       confidence,              -- 0-1 from the model
-      thumb bytea null,        -- optional 128px jpeg, ~6KB
       created_at)
 
 meal_items(id, meal_id, name, qty, unit,
@@ -168,7 +168,7 @@ Two things worth noticing:
 3. Optional one-line note: *"about 2 cups of rice, chicken thigh not breast"*. This note matters more than the photo for accuracy — the model can't see portion mass or cooking oil.
 4. POST to `/api/meals/analyze`. Server calls Claude with vision + a strict tool schema, returns line items.
 5. Editable confirmation card appears. Tap a number to fix it. Save.
-6. Image is never written to disk. Optional 128px thumb stored inline.
+6. Image is never written to disk, and no thumbnail is kept. The meal survives as text and numbers only.
 
 **Accuracy honesty:** photo-based macro estimation is roughly ±20% on a single meal, and it systematically under-counts cooking oil. Two mitigations:
 - Push the **note** hard in the UI — it's where the real signal is.
@@ -335,7 +335,6 @@ Protein is the exception that's targeted from day one because it's the one numbe
 **Later / only if you want it:**
 - Sleep + steps (Health Auto Export bridge)
 - Barcode scanning (Android only via `BarcodeDetector`; iOS = photograph the label)
-- Photo thumbnails in the day summary
 - Plate calculator ("185 lb = 45+25 per side")
 - Deload detection from volume + RPE trends
 
@@ -426,15 +425,17 @@ Days 1–2 give you a genuinely usable app. Day 3 is upside.
 
 | | |
 |---|---|
+| **Units** | lb on screen and in every input; kg in the database. Plate math, increments and PRs all read in lb. |
+| **Photos** | Analyzed and discarded. No thumbnails, no object storage. |
+| **Strava** | In. OAuth plus a nightly pull on day 3. |
 | **Goal** | Undecided by design — two-week calibration, then the app proposes targets from measured TDEE (§5.5). |
 | **Coach tone** | Blunt analyst (§5.4). |
-| **Platform** | Installable PWA. Capacitor later only if HealthKit becomes worth it. |
+| **Progression** | AI suggests, bounded, with the mechanical baseline shown alongside (§5.2). |
+| **Platform** | Installable PWA. Capacitor later only if HealthKit earns it. |
 | **Database** | Supabase Postgres. No object storage. |
 
 ### Still open
 
-1. **Units** — lb or kg on screen? (Storage is kg internally either way.)
-2. **Photo thumbnails** — keep a 128px thumb (~6KB/meal, ~2MB/year) so the day summary is visual, or truly store nothing?
-3. **Strava** — connect on day 3, or skip cardio entirely for now?
-4. **Training split** — do you follow a named program with fixed days, or decide at the gym? Changes whether the app suggests *today's session* or just waits for you to type.
-5. **Weigh-in reliability** — adaptive TDEE degrades fast below ~4 weigh-ins/week. Realistic for you, or should the math be tolerant of gaps?
+1. **Weigh-in frequency** — adaptive TDEE degrades below ~4 mornings/week. Realistic for you, or should the math be built to tolerate gaps from the start?
+2. **Soreness tap** — include the optional 4-state chip per muscle group on the homepage, or rank purely on recovery time and volume debt?
+3. **Training split** — named program with fixed days, or decide at the gym? Changes whether the homepage proposes *today's session* or just ranks muscles.
