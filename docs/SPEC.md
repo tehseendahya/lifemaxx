@@ -17,7 +17,7 @@
 | Strava via MCP? | **No — use the Strava REST API directly.** | MCP is a protocol for giving *a chat assistant* tools. Your web app should just call Strava's API. (An MCP server is still worth building *later*, pointed at your own DB — see §8.) |
 | Apple Health? | Via **Health Auto Export → webhook** | The web platform cannot read HealthKit. That $5 iOS app can POST steps/sleep/weight/HR to your API on a schedule. Cheapest possible bridge. |
 | Progression suggestions | **AI proposes, bounded** | With RPE, to-failure and recovery in context there's real signal to reason over. Guardrails in §5.2: show the mechanical baseline alongside, cap the jump at one increment. |
-| LLM provider | **OpenAI, `gpt-5.6` family** | Sol for vision and deep coaching, Terra for in-session, Luna for parsing. Per-route choices in §6. |
+| LLM provider | **OpenAI, cheapest tier that works** | Terra for vision and coaching, Luna for parsing and digests, Sol nowhere by default. ~$4/mo. Per-route table and the upgrade path in §6. |
 | Training split | **App stays split-agnostic** | You decide at the gym, so it ranks muscles by debt rather than prescribing a day. My programming recommendation is §5.8 — advice, not something the app enforces. |
 | Time to build | **~3 days**, usable after 2 | Phasing in §9. |
 
@@ -387,9 +387,13 @@ Goals get re-read on every call, so editing the textarea changes the coach's beh
 
 ---
 
-### 5.8 Programming recommendation — Upper/Lower, 4 days
+### 5.8 Optional: a split, if you ever want one
 
-You decide at the gym, so **the app will never prescribe a split.** It ranks muscles by debt and you pick. But you asked what I'd actually run, given running prep + size + abs:
+**The app does not implement this section.** There is no program table, no assigned days, no "today is Upper day", no adherence tracking, and no way to be non-compliant. This is training advice — the kind you'd get in conversation — written down because you asked, and safe to ignore entirely.
+
+**Why the app doesn't need a split.** A split is a *manual heuristic for balanced weekly volume*: follow the grid and everything gets hit twice. The muscle-debt ranking (§5.2) targets the same outcome by measuring what you actually did, which means it self-corrects when you improvise. Skip Thursday on a program and you're behind with nothing to tell you; skip it here and Friday's homepage says legs are owed sets. **For someone who decides at the gym, debt ranking is strictly the better tool** — which is why it's the thing that got built.
+
+That said, if you ever want a default shape to fall back on, given running prep + size + abs:
 
 | Day | Lift | Run |
 |---|---|---|
@@ -419,16 +423,20 @@ All model calls go through the **OpenAI Node SDK** against the `gpt-5.6` family.
 
 ### Model per route
 
+**Default policy: Luna where it works, Terra where it doesn't, Sol nowhere until a route proves it needs one.** Cheap and fast beats clever for almost everything here — most of these calls are extraction, not reasoning.
+
 | Route | Model | Why |
 |---|---|---|
-| `POST /api/meals/analyze` | `gpt-5.6-sol` | Strongest vision in the family. This is the one place a wrong number compounds silently into your daily total, and the delta over Terra is about $2/month. |
-| `POST /api/sets/parse` | `gpt-5.6-luna` | Text → structured sets is a narrow extraction task. At $0.20/1M it's free. |
-| `POST /api/session/ask` | `gpt-5.6-terra` | Needs to be fast on 90 seconds of rest. Terra with a cached prefix is the right point on the curve. |
-| `POST /api/session/suggest` | `gpt-5.6-terra` | Same context, same latency budget. |
-| `POST /api/coach/chat` | `gpt-5.6-sol` | Open-ended reasoning across two weeks of data. Worth the flagship. |
-| Cron nightly / weekly | `gpt-5.6-terra` | Small input, short output, no latency pressure. |
+| `POST /api/meals/analyze` | `gpt-5.6-terra` | Vision plus portion estimation is the one genuinely hard call. Terra is the cheapest tier credible at it, and adaptive TDEE (§5.5) absorbs the residual error anyway — so Sol's accuracy edge isn't worth 2.5× the price. |
+| `POST /api/sets/parse` | `gpt-5.6-luna` | Text → structured sets is narrow extraction. Free at this volume. |
+| `POST /api/session/ask` | `gpt-5.6-terra` | The one route where reasoning quality *is* the product. Cached prefix keeps it cheap anyway. |
+| `POST /api/session/suggest` | `gpt-5.6-luna` | The suggestion is bounded by the mechanical baseline (§5.2) — the model writes one sentence of rationale, not the numbers. Luna is plenty. |
+| `POST /api/coach/chat` | `gpt-5.6-terra` | Two weeks of context and an open question. Terra handles it; revisit only if the answers feel thin. |
+| Cron nightly / weekly | `gpt-5.6-luna` | Small rollup in, three sentences out. |
 
-The bare `gpt-5.6` alias routes to Sol. Pin the explicit IDs rather than the alias so a routing change upstream can't silently move your cost or behaviour.
+The bare `gpt-5.6` alias routes to Sol. **Pin explicit IDs**, never the alias — otherwise an upstream routing change silently moves both your cost and your behaviour.
+
+**One escape hatch:** every route's model is a constant in a single `lib/models.ts`, so bumping a route to Sol is a one-line change if its output ever disappoints. Start cheap, upgrade on evidence rather than on anxiety.
 
 ### Prompt caching is automatic — but only if you keep the prefix stable
 
@@ -456,16 +464,14 @@ At 4 meals/day, 4 lifts/week with ~6 questions each, and one coach chat a day:
 
 | | Model | per month |
 |---|---|---|
-| Meal vision, ×4/day | sol | ~$3.30 |
+| Meal vision, ×4/day | terra | ~$1.30 |
 | Lift sessions — prefix write + ~6 cached questions | terra | ~$1.30 |
-| Set parsing | luna | ~$0.05 |
-| Nightly verdict | terra | ~$0.30 |
-| Coach chat, ×1/day | sol | ~$3.00 |
-| **Total** | | **~$8/mo** |
+| Coach chat, ×1/day | terra | ~$1.20 |
+| Set parsing + suggestions | luna | ~$0.15 |
+| Nightly + weekly digests | luna | ~$0.05 |
+| **Total** | | **~$4/mo** |
 
-Hosting, database and push are $0 on free tiers. **Under $10/month all-in.**
-
-If that ever matters, the cheap lever is swapping meal vision to `gpt-5.6-terra` (saves ~$2/mo), not touching the coach — the coach is the part you'd actually miss.
+Hosting, database and push are $0 on free tiers. **Roughly $4/month all-in** — about half the Sol-heavy version. The whole difference is meal-photo accuracy, which the TDEE loop already compensates for.
 
 ### One environment constraint
 
