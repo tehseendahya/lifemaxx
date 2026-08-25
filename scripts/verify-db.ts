@@ -1,7 +1,7 @@
 import "../load-env";
 import { adminDb, db, withUser } from "../src/db";
 import { profiles, meals, workouts, sets, exercises, stravaAccounts } from "../src/db/schema";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { getDayMeals, getWorkoutSets, getMuscleVolume } from "../src/lib/queries";
 import { resolveExercise } from "../src/lib/exercises";
 
@@ -154,6 +154,30 @@ async function main() {
 
   const volume = await withUser(A, () => getMuscleVolume(A, today));
   check("muscle volume resolves under RLS", (volume.states.find((s) => s.muscle === "chest")?.setsLast7d ?? 0) > 0);
+
+  console.log("\noffline outbox guarantees");
+
+  // What makes a retry after a lost response safe. The route upserts on this
+  // index; without it the same set lands twice and the session reads wrong.
+  const clientId = "eeeeeeee-0000-4000-8000-00000000000e";
+  const insertOnce = () => withUser(A, () => db.insert(sets).values({
+    workoutId: workoutA.id, exerciseId: bench.id, setIndex: 2,
+    reps: 5, weightKg: 83.9, clientId,
+  }).onConflictDoUpdate({
+    target: [sets.workoutId, sets.clientId],
+    set: { reps: 5, weightKg: 83.9 },
+  }).returning());
+
+  const firstDelivery = await insertOnce();
+  const retry = await insertOnce();
+  const rows = await withUser(A, () => db.select().from(sets)
+    .where(and(eq(sets.workoutId, workoutA.id), eq(sets.clientId, clientId))));
+
+  check("a retried set does not become two rows", rows.length === 1, `${rows.length} row(s)`);
+  check("the retry lands on the row the first attempt wrote",
+    firstDelivery[0]?.id === retry[0]?.id);
+  check("the retry does not renumber the set",
+    rows[0]?.setIndex === firstDelivery[0]?.setIndex, `set_index ${rows[0]?.setIndex}`);
 
   const fuzzy = await withUser(A, () => resolveExercise("benh pres", A));
   check("fuzzy exercise matching works under RLS", fuzzy?.slug === "barbell-bench-press",

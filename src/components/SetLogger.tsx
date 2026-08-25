@@ -1,6 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
 import { Card, Label, Button } from "./ui";
+import { enqueueSet, newClientId } from "@/lib/outbox";
+import { parseShorthand } from "@/lib/llm/shorthand";
 
 interface Baseline { action: string; weightLb: number; sets: number; reps: number; reason: string }
 interface Suggestion { weightLb: number; sets: number; reps: number; reason: string }
@@ -13,9 +15,21 @@ interface Suggestion { weightLb: number; sets: number; reps: number; reason: str
  * trustworthy over months rather than days. The baseline is computed locally
  * and always renders, even when the suggestion call fails or you're offline.
  */
+export interface OptimisticSet {
+  clientId: string;
+  exerciseId: string;
+  exerciseName: string;
+  reps: number;
+  weightLb: number;
+  rpe: number | null;
+  toFailure: boolean;
+  isWarmup: boolean;
+  felt: string | null;
+}
+
 export function SetLogger({ catalogue, onLogged }: {
-  catalogue: { id: string; name: string }[];
-  onLogged: () => void;
+  catalogue: { id: string; name: string; slug?: string }[];
+  onLogged: (optimistic?: OptimisticSet) => void;
 }) {
   const [exerciseId, setExerciseId] = useState("");
   const [weight, setWeight] = useState("");
@@ -52,55 +66,100 @@ export function SetLogger({ catalogue, onLogged }: {
     return () => { cancelled = true; };
   }, [exerciseId]);
 
+  /**
+   * Queues the set and returns. It does not wait for the network, because in a
+   * gym basement there often isn't one — the write lands in IndexedDB first and
+   * syncs when signal comes back.
+   */
   async function logSet() {
     if (!exerciseId || !reps) return;
     setBusy(true);
-    await fetch("/api/sets", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        exerciseId,
-        reps: Number(reps),
-        weightLb: Number(weight) || 0,
-        rpe: rpe ? Number(rpe) : null,
-        toFailure, isWarmup, felt: felt || null, note,
-      }),
-    });
+
+    const clientId = newClientId();
+    const payload = {
+      clientId,
+      exerciseId,
+      reps: Number(reps),
+      weightLb: Number(weight) || 0,
+      rpe: rpe ? Number(rpe) : null,
+      toFailure,
+      isWarmup,
+      felt: felt || null,
+      note,
+    };
+    await enqueueSet(payload);
+
     setBusy(false);
     setRpe(""); setToFailure(false); setNote("");
-    onLogged();
+    onLogged({
+      ...payload,
+      clientId,
+      exerciseName: catalogue.find((e) => e.id === exerciseId)?.name ?? "",
+      felt: felt || null,
+    });
   }
 
+  /**
+   * Parses on the server when it can, on the device when it can't.
+   *
+   * The shorthand parser is pure and already shipped to the browser, so losing
+   * signal costs the fuzzy exercise matching, not the ability to log. Anything
+   * the on-device name match cannot place is reported rather than guessed —
+   * a set filed against the wrong exercise corrupts the trend chart quietly.
+   */
   async function logText() {
     if (!text.trim()) return;
     setBusy(true);
-    const res = await fetch("/api/sets/parse", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
-    const data = await res.json();
-    setBusy(false);
 
-    if (data.unresolved?.length) {
-      alert(`Couldn't match: ${data.unresolved.join(", ")}. Try the picker.`);
-      return;
+    let entries: { exerciseId: string; exerciseName: string; sets: ParsedSet[] }[] = [];
+    let unresolved: string[] = [];
+
+    try {
+      const res = await fetch("/api/sets/parse", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      const data = await res.json();
+      unresolved = data.unresolved ?? [];
+      entries = (data.entries ?? [])
+        .filter((e: { exercise: unknown }) => e.exercise)
+        .map((e: { exercise: { id: string; name: string }; sets: ParsedSet[] }) => ({
+          exerciseId: e.exercise.id, exerciseName: e.exercise.name, sets: e.sets,
+        }));
+    } catch {
+      const local = resolveLocally(parseShorthand(text), catalogue);
+      entries = local.entries;
+      unresolved = local.unresolved;
     }
-    for (const entry of data.entries ?? []) {
+
+    const optimistic: OptimisticSet[] = [];
+    for (const entry of entries) {
       for (const s of entry.sets) {
-        await fetch("/api/sets", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            exerciseId: entry.exercise.id,
-            reps: s.reps, weightLb: s.weight_lb, rpe: s.rpe,
-            toFailure: s.to_failure, isWarmup: s.is_warmup, rawText: text,
-          }),
+        const clientId = newClientId();
+        await enqueueSet({
+          clientId,
+          exerciseId: entry.exerciseId,
+          reps: s.reps, weightLb: s.weight_lb, rpe: s.rpe,
+          toFailure: s.to_failure, isWarmup: s.is_warmup, rawText: text,
+        });
+        optimistic.push({
+          clientId, exerciseId: entry.exerciseId, exerciseName: entry.exerciseName,
+          reps: s.reps, weightLb: s.weight_lb, rpe: s.rpe,
+          toFailure: s.to_failure, isWarmup: s.is_warmup, felt: null,
         });
       }
     }
+
+    setBusy(false);
+    if (unresolved.length > 0) {
+      alert(`Couldn't match: ${unresolved.join(", ")}. Use the picker for ${unresolved.length === 1 ? "it" : "those"}.`);
+    }
+    if (optimistic.length === 0) return;
+
     setText("");
-    onLogged();
+    optimistic.forEach((set) => onLogged(set));
   }
 
   return (
@@ -194,6 +253,33 @@ export function SetLogger({ catalogue, onLogged }: {
       )}
     </Card>
   );
+}
+
+interface ParsedSet {
+  reps: number; weight_lb: number; rpe: number | null;
+  to_failure: boolean; is_warmup: boolean;
+}
+
+/** Exact name or slug match against the catalogue already in the page. */
+function resolveLocally(
+  parsed: { exercise_query: string; sets: ParsedSet[] }[],
+  catalogue: { id: string; name: string; slug?: string }[],
+) {
+  const normalise = (s: string) => s.toLowerCase().trim().replace(/\s+/g, " ");
+  const byName = new Map(catalogue.map((e) => [normalise(e.name), e]));
+  const bySlug = new Map(catalogue.filter((e) => e.slug).map((e) => [e.slug!, e]));
+
+  const entries: { exerciseId: string; exerciseName: string; sets: ParsedSet[] }[] = [];
+  const unresolved: string[] = [];
+
+  for (const entry of parsed) {
+    const query = normalise(entry.exercise_query);
+    const match = byName.get(query) ?? bySlug.get(query.replace(/ /g, "-"));
+    if (match) entries.push({ exerciseId: match.id, exerciseName: match.name, sets: entry.sets });
+    else unresolved.push(entry.exercise_query);
+  }
+
+  return { entries, unresolved };
 }
 
 function NumField({ label, value, onChange, placeholder }: {

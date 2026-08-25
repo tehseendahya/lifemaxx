@@ -32,7 +32,7 @@ export default async function Lift() {
     <LiftClient
       active={active ? { id: active.id, startedAt: active.startedAt.toISOString() } : null}
       sets={sets.map((s) => ({
-        id: s.id, exerciseId: s.exerciseId, exerciseName: s.exerciseName,
+        id: s.id, clientId: s.clientId, exerciseId: s.exerciseId, exerciseName: s.exerciseName,
         reps: s.reps, weightLb: displayLb(s.weightKg), rpe: s.rpe,
         toFailure: s.toFailure, isWarmup: s.isWarmup, felt: s.felt,
       }))}

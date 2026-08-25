@@ -93,7 +93,7 @@ export async function getActiveWorkout(userId: string) {
 export async function getWorkoutSets(workoutId: string) {
   return db
     .select({
-      id: sets.id, exerciseId: sets.exerciseId, setIndex: sets.setIndex,
+      id: sets.id, clientId: sets.clientId, exerciseId: sets.exerciseId, setIndex: sets.setIndex,
       reps: sets.reps, weightKg: sets.weightKg, rpe: sets.rpe,
       toFailure: sets.toFailure, isWarmup: sets.isWarmup, restS: sets.restS,
       note: sets.note, felt: sets.felt, loggedAt: sets.loggedAt,

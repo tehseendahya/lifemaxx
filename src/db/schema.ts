@@ -177,10 +177,16 @@ export const sets = pgTable("sets", {
   /** Exactly what was typed, so a bad parse is recoverable. */
   rawText: text("raw_text").notNull().default(""),
   needsParse: boolean("needs_parse").notNull().default(false),
+  /**
+   * Minted on the phone before the first attempt, so a retry after a lost
+   * response is recognised as the same set rather than written again.
+   */
+  clientId: uuid("client_id"),
   loggedAt: timestamp("logged_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [
   index("sets_workout_idx").on(t.workoutId),
   index("sets_exercise_idx").on(t.exerciseId, t.loggedAt),
+  uniqueIndex("sets_workout_client_idx").on(t.workoutId, t.clientId),
 ]);
 
 /** The in-session chat, kept as both context and history. */

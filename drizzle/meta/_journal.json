@@ -22,6 +22,13 @@
       "when": 1787125113643,
       "tag": "0002_running_summaries",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1787125113644,
+      "tag": "0003_set_client_id",
+      "breakpoints": true
     }
   ]
 }
