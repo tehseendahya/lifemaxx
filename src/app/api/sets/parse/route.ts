@@ -1,4 +1,5 @@
 import { route } from "@/lib/api";
+import { withUser } from "@/db";
 import { getLlm, JSON_SCHEMAS, parsedSetsSchema } from "@/lib/llm";
 import { MODELS } from "@/lib/models";
 import { SETS_SYSTEM } from "@/lib/llm/prompts";
@@ -11,6 +12,9 @@ import { resolveExercise } from "@/lib/exercises";
  * The deterministic parser handles the notation people actually type, costs
  * nothing and works offline — so most gym entries never reach the network. The
  * model is the fallback for prose and unusual phrasing, not the default path.
+ *
+ * Scoping is manual because the fallback is a model call: it happens between
+ * the parse and the database lookup, never inside a transaction.
  */
 export const POST = route<{ text: string }>(async ({ userId, body }) => {
   const text = body.text?.trim();
@@ -34,17 +38,17 @@ export const POST = route<{ text: string }>(async ({ userId, body }) => {
     entries = result.entries;
   }
 
-  const resolved = await Promise.all(
+  const resolved = await withUser(userId, () => Promise.all(
     entries.map(async (entry) => ({
       query: entry.exercise_query,
       exercise: await resolveExercise(entry.exercise_query, userId),
       sets: entry.sets,
     })),
-  );
+  ));
 
   return {
     usedModel,
     entries: resolved,
     unresolved: resolved.filter((r) => !r.exercise).map((r) => r.query),
   };
-});
+}, { scope: "manual" });

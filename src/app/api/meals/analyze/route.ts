@@ -1,4 +1,5 @@
 import { route } from "@/lib/api";
+import { withUser } from "@/db";
 import { getLlm, JSON_SCHEMAS, mealAnalysisSchema, type Message, type ContentPart } from "@/lib/llm";
 import { MODELS } from "@/lib/models";
 import { MEAL_SYSTEM, goalsBlock } from "@/lib/llm/prompts";
@@ -15,7 +16,9 @@ export const POST = route<Body>(async ({ userId, body }) => {
     throw new Error("Send a photo, a note, or both.");
   }
 
-  const profile = await getProfile(userId);
+  // Scoped read first, then the model call outside the transaction — see
+  // RouteOptions.scope in lib/api.ts for why the two must not overlap.
+  const profile = await withUser(userId, () => getProfile(userId));
 
   // Prefix order is load-bearing: goals and system prompt are stable across
   // every call, so they sit in front and stay in the cache.
@@ -55,4 +58,4 @@ export const POST = route<Body>(async ({ userId, body }) => {
 
   // The image is not persisted anywhere. It dies with this request.
   return { ...analysis, totals };
-});
+}, { scope: "manual" });

@@ -1,5 +1,5 @@
 import webpush from "web-push";
-import { db } from "@/db";
+import { db, isScoped, withUser } from "@/db";
 import { pushSubscriptions } from "@/db/schema";
 import { eq } from "drizzle-orm";
 
@@ -28,8 +28,12 @@ export async function sendPush(userId: string, payload: { title: string; body: s
     return 0;
   }
 
-  const subs = await db.select().from(pushSubscriptions)
+  // push_subscriptions is RLS-protected, so this needs a user scope. Callers
+  // are a mix — request handlers already have one, crons do not — so enter one
+  // only if we are not already inside it.
+  const read = () => db.select().from(pushSubscriptions)
     .where(eq(pushSubscriptions.userId, userId));
+  const subs = isScoped() ? await read() : await withUser(userId, read);
 
   let sent = 0;
   for (const sub of subs) {
@@ -42,7 +46,8 @@ export async function sendPush(userId: string, payload: { title: string; body: s
     } catch (err) {
       const status = (err as { statusCode?: number }).statusCode;
       if (status === 410 || status === 404) {
-        await db.delete(pushSubscriptions).where(eq(pushSubscriptions.id, sub.id));
+        const drop = () => db.delete(pushSubscriptions).where(eq(pushSubscriptions.id, sub.id));
+        if (isScoped()) await drop(); else await withUser(userId, drop);
       } else {
         console.error("[push] send failed", err);
       }

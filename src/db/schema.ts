@@ -210,9 +210,18 @@ export const activities = pgTable("activities", {
   kcal: integer("kcal"),
   /** Strava's own "was this hard" signal, when present. */
   sufferScore: real("suffer_score"),
+  /** One-line verdict on this run. Null until the summariser has seen it. */
+  verdict: text("verdict"),
+  verdictGeneratedAt: timestamp("verdict_generated_at", { withTimezone: true }),
 }, (t) => [
   index("activities_user_date_idx").on(t.userId, t.localDate),
-  uniqueIndex("activities_provider_external_idx").on(t.provider, t.externalId),
+  /**
+   * What makes the nightly pull idempotent. Scoped by user as well as by
+   * provider: Strava ids are unique per activity, but two accounts syncing the
+   * same connected athlete would otherwise have the first one silently swallow
+   * the second's rows.
+   */
+  uniqueIndex("activities_user_provider_external_idx").on(t.userId, t.provider, t.externalId),
 ]);
 
 export const bodyMetrics = pgTable("body_metrics", {
@@ -245,6 +254,21 @@ export const coachMessages = pgTable("coach_messages", {
   content: text("content").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [index("coach_messages_user_idx").on(t.userId, t.createdAt)]);
+
+/**
+ * The Sunday running rollup: mileage, pace trend and how the running load sat
+ * against the lifting load. Stored rather than recomputed so the week's verdict
+ * doesn't drift every time the page is opened.
+ */
+export const weeklyRunningSummaries = pgTable("weekly_running_summaries", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull().references(() => profiles.id, { onDelete: "cascade" }),
+  /** Monday of the week being summarised. */
+  weekStart: date("week_start").notNull(),
+  stats: jsonb("stats").notNull(),
+  summary: text("summary").notNull(),
+  generatedAt: timestamp("generated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex("weekly_running_user_week_idx").on(t.userId, t.weekStart)]);
 
 export const stravaAccounts = pgTable("strava_accounts", {
   userId: uuid("user_id").primaryKey().references(() => profiles.id, { onDelete: "cascade" }),

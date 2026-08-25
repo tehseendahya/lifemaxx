@@ -1,4 +1,5 @@
 import { route } from "@/lib/api";
+import { withUser } from "@/db";
 import { getLlm, JSON_SCHEMAS, suggestionSchema } from "@/lib/llm";
 import { MODELS } from "@/lib/models";
 import { SUGGEST_SYSTEM, goalsBlock, stableJson } from "@/lib/llm/prompts";
@@ -17,11 +18,19 @@ import { getExerciseHistory, getProfile, getActiveWorkout, getWorkoutSets } from
  * than just week one.
  */
 export const POST = route<{ exerciseId: string }>(async ({ userId, body }) => {
-  const [exercise] = await db.select().from(exercises)
-    .where(eq(exercises.id, body.exerciseId)).limit(1);
-  if (!exercise) throw new Error("Unknown exercise.");
-
-  const history = await getExerciseHistory(userId, exercise.id, 5);
+  // Everything the suggestion needs, read in one scoped transaction. The model
+  // call below must not run inside it — see RouteOptions.scope in lib/api.ts.
+  const read = await withUser(userId, async () => {
+    const [exercise] = await db.select().from(exercises)
+      .where(eq(exercises.id, body.exerciseId)).limit(1);
+    if (!exercise) throw new Error("Unknown exercise.");
+    const history = await getExerciseHistory(userId, exercise.id, 5);
+    const profile = await getProfile(userId);
+    const active = await getActiveWorkout(userId);
+    const todaySets = active ? await getWorkoutSets(active.id) : [];
+    return { exercise, history, profile, todaySets };
+  });
+  const { exercise, history, profile, todaySets } = read;
   const asSessions: PreviousSession[] = history.map((h) => ({
     date: h.date,
     sets: h.sets.map((s) => ({
@@ -36,10 +45,6 @@ export const POST = route<{ exerciseId: string }>(async ({ userId, body }) => {
   if (baseline.action === "start") {
     return { baseline: toLbView(baseline), suggestion: null, clamped: false };
   }
-
-  const profile = await getProfile(userId);
-  const active = await getActiveWorkout(userId);
-  const todaySets = active ? await getWorkoutSets(active.id) : [];
 
   const context = stableJson({
     exercise: exercise.name,
@@ -89,7 +94,7 @@ export const POST = route<{ exerciseId: string }>(async ({ userId, body }) => {
   }
 
   return { baseline: toLbView(baseline), suggestion, clamped };
-});
+}, { scope: "manual" });
 
 function toLbView(b: ReturnType<typeof computeBaseline>) {
   return { action: b.action, weightLb: displayLb(b.weightKg), sets: b.sets, reps: b.reps, reason: b.reason };

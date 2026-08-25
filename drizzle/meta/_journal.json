@@ -8,6 +8,20 @@
       "when": 1787125113641,
       "tag": "0000_peaceful_prism",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1787125113642,
+      "tag": "0001_row_level_security",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787125113643,
+      "tag": "0002_running_summaries",
+      "breakpoints": true
     }
   ]
 }

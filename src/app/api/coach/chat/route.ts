@@ -2,7 +2,7 @@ import { currentUserId } from "@/lib/supabase/server";
 import { getLlm } from "@/lib/llm";
 import { MODELS } from "@/lib/models";
 import { buildCoachContext } from "@/lib/llm/context";
-import { db } from "@/db";
+import { db, withUser } from "@/db";
 import { coachMessages } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
 import { getProfile, localDate } from "@/lib/queries";
@@ -14,15 +14,20 @@ export async function POST(req: Request) {
   const { question } = (await req.json()) as { question?: string };
   if (!question?.trim()) return new Response("Ask something.", { status: 400 });
 
-  const profile = await getProfile(userId);
-  const today = localDate(profile?.tz ?? "America/New_York");
-  const { prefix } = await buildCoachContext(userId, today);
+  // Fourteen days of context and the question's own row, in one scoped
+  // transaction; the stream below runs outside it. See session/ask for why.
+  const { prefix, recent } = await withUser(userId, async () => {
+    const profile = await getProfile(userId);
+    const today = localDate(profile?.tz ?? "America/New_York");
+    const built = await buildCoachContext(userId, today);
 
-  const recent = await db.select().from(coachMessages)
-    .where(eq(coachMessages.userId, userId))
-    .orderBy(desc(coachMessages.createdAt)).limit(10);
+    const rows = await db.select().from(coachMessages)
+      .where(eq(coachMessages.userId, userId))
+      .orderBy(desc(coachMessages.createdAt)).limit(10);
 
-  await db.insert(coachMessages).values({ userId, role: "user", content: question.trim() });
+    await db.insert(coachMessages).values({ userId, role: "user", content: question.trim() });
+    return { prefix: built.prefix, recent: rows };
+  });
 
   const messages = [
     { role: "system" as const, content: prefix },
@@ -45,7 +50,8 @@ export async function POST(req: Request) {
         console.error("[coach/chat]", err);
       } finally {
         if (full.trim()) {
-          await db.insert(coachMessages).values({ userId, role: "assistant", content: full });
+          await withUser(userId, () =>
+            db.insert(coachMessages).values({ userId, role: "assistant", content: full }));
         }
         controller.close();
       }

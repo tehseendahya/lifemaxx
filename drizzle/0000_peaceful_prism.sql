@@ -1,6 +1,6 @@
 -- Required by the fuzzy exercise matcher in src/lib/exercises.ts.
 -- Without it, resolveExercise() falls through to the model on every typo.
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;--> statement-breakpoint
 
 CREATE TYPE "public"."activity_provider" AS ENUM('strava', 'manual', 'healthkit');--> statement-breakpoint
 CREATE TYPE "public"."chat_role" AS ENUM('user', 'assistant');--> statement-breakpoint
