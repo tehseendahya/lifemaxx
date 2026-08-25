@@ -1,9 +1,16 @@
 import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
+import { timingSafeEqual } from "node:crypto";
 import { currentUserId } from "@/lib/supabase/server";
-import { exchangeCode, syncActivities } from "@/lib/strava";
-import { db } from "@/db";
+import { exchangeCode, syncActivities, STRAVA_STATE_COOKIE } from "@/lib/strava";
+import { db, withUser } from "@/db";
 import { stravaAccounts } from "@/db/schema";
 import { getProfile } from "@/lib/queries";
+
+function statesMatch(a: string | undefined, b: string | null): boolean {
+  if (!a || !b || a.length !== b.length) return false;
+  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
@@ -11,14 +18,20 @@ export async function GET(req: Request) {
   const state = url.searchParams.get("state");
 
   const userId = await currentUserId();
-  // state carries the user id we issued; a mismatch means it isn't our flow.
-  if (!userId || !code || state !== userId) {
-    return NextResponse.redirect(new URL("/settings?strava=failed", req.url));
-  }
+  const expected = (await cookies()).get(STRAVA_STATE_COOKIE)?.value;
+
+  const fail = () => {
+    const response = NextResponse.redirect(new URL("/settings?strava=failed", req.url));
+    response.cookies.delete(STRAVA_STATE_COOKIE);
+    return response;
+  };
+
+  if (!userId || !code || !statesMatch(expected, state)) return fail();
 
   try {
     const token = await exchangeCode(code);
-    await db.insert(stravaAccounts).values({
+
+    await withUser(userId, () => db.insert(stravaAccounts).values({
       userId,
       athleteId: String(token.athlete?.id ?? ""),
       accessToken: token.access_token,
@@ -31,14 +44,16 @@ export async function GET(req: Request) {
         refreshToken: token.refresh_token,
         expiresAt: new Date(token.expires_at * 1000),
       },
-    });
+    }));
 
-    const profile = await getProfile(userId);
+    const profile = await withUser(userId, () => getProfile(userId));
     await syncActivities(userId, profile?.tz ?? "America/New_York");
   } catch (err) {
     console.error("[strava/callback]", err);
-    return NextResponse.redirect(new URL("/settings?strava=failed", req.url));
+    return fail();
   }
 
-  return NextResponse.redirect(new URL("/settings?strava=connected", req.url));
+  const response = NextResponse.redirect(new URL("/settings?strava=connected", req.url));
+  response.cookies.delete(STRAVA_STATE_COOKIE);
+  return response;
 }

@@ -128,3 +128,26 @@ export function mealMessages(
 
   return messages;
 }
+
+export const RUN_VERDICT_SYSTEM = `You write a one-line verdict on a run, for the person who ran it.
+
+You are given a batch of runs, each with an index, plus that person's recent running baseline. Return one verdict per run, keyed by the same index.
+
+- One sentence. Never two.
+- Say what the run WAS relative to their own recent running — not whether it was good in the abstract. "Fastest 5 of the block, 12s/mi under your average" beats "solid effort".
+- Use the numbers you are given. Pace in min/mi, distance in miles.
+- No praise for an ordinary easy run. "Easy 4 at 9:20, right where easy should sit" is the correct verdict for an ordinary easy run.
+- If it collided with a hard lift day, that is the most interesting fact about it — lead with it.
+- Never invent a workout structure you were not told about. If you do not know it was intervals, do not call it intervals.
+- Never mention kilometres.`;
+
+export const RUNNING_WEEK_SYSTEM = `You write the weekly running rollup for someone training for a half marathon while also lifting.
+
+You are given this week's and last week's mileage, the pace trend from a regression over their recent runs, and any days where hard running landed within 24 hours of hard lower-body lifting.
+
+- Three sentences maximum.
+- Sentence one: what the mileage actually did, week over week, with the numbers.
+- Sentence two: whether the pace is genuinely moving. If the trend is marked unreliable, say the sample is too thin to call and do NOT quote a number from it.
+- Sentence three: one thing to change next week. If running and lifting collided, that is almost always the thing — say which one to move and why, given the half is the dated goal.
+- No hedging, no lists, no praise unless something genuinely notable happened.
+- Miles and min/mi only. Never kilometres.`;

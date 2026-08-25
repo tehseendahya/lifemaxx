@@ -1,12 +1,14 @@
 import { db } from "@/db";
 import {
   meals, mealItems, sets, workouts, exercises, exerciseMuscles,
-  bodyMetrics, targets, profiles, activities, gyms, type Muscle, MUSCLES,
+  bodyMetrics, targets, profiles, activities, gyms, weeklyRunningSummaries,
+  type Muscle, MUSCLES,
 } from "@/db/schema";
 import { and, desc, eq, gte, sql, inArray } from "drizzle-orm";
 import { hardSetsByMuscle, type CountedSet } from "./domain/muscles";
 import { rankMuscles, type MuscleState } from "./domain/readiness";
 import { estimateTdee, proteinTargetG, WINDOW_DAYS, type WeighIn } from "./domain/tdee";
+import { isRun, LOWER_BODY, weekStartOf, type Run } from "./domain/running";
 
 /** Local date string for a user's timezone — the app's unit of "a day". */
 export function localDate(tz: string, at: Date = new Date()): string {
@@ -226,4 +228,102 @@ export async function getRecentActivities(userId: string, today: string, days = 
   return db.select().from(activities)
     .where(and(eq(activities.userId, userId), gte(activities.localDate, shiftDate(today, -days))))
     .orderBy(desc(activities.startedAt));
+}
+
+
+// ------------------------------------------------------------------ running
+
+/** How far back the running views and the weekly rollup look. */
+export const RUNNING_LOOKBACK_DAYS = 56;
+
+export interface StoredRun extends Run {
+  id: string;
+  startedAt: Date;
+  verdict: string | null;
+}
+
+/**
+ * Runs only — rides and swims are stored in the same table but are not what the
+ * half-marathon goal is about, and averaging a bike pace into a running pace
+ * would be nonsense.
+ */
+export async function getRuns(
+  userId: string,
+  today: string,
+  days = RUNNING_LOOKBACK_DAYS,
+): Promise<StoredRun[]> {
+  const rows = await db.select().from(activities)
+    .where(and(eq(activities.userId, userId), gte(activities.localDate, shiftDate(today, -days))))
+    .orderBy(desc(activities.startedAt));
+
+  return rows.filter((r) => isRun(r.type)).map((r) => ({
+    id: r.id,
+    localDate: r.localDate,
+    startedAt: r.startedAt,
+    name: r.name,
+    type: r.type,
+    distanceM: r.distanceM,
+    durationS: r.durationS,
+    elevationM: r.elevationM,
+    avgHr: r.avgHr,
+    sufferScore: r.sufferScore,
+    verdict: r.verdict,
+  }));
+}
+
+/**
+ * The days a real lower-body session happened, for interference detection.
+ *
+ * Warmups are excluded and a token half-set of calf raises should not make a
+ * Tuesday count as leg day, so it takes a threshold of hard sets.
+ */
+export const LOWER_BODY_DAY_THRESHOLD = 3;
+
+export async function getLowerBodyLiftDates(
+  userId: string,
+  today: string,
+  days = RUNNING_LOOKBACK_DAYS,
+): Promise<string[]> {
+  const rows = await db
+    .select({
+      localDate: workouts.localDate,
+      contribution: exerciseMuscles.contribution,
+      muscle: exerciseMuscles.muscle,
+    })
+    .from(sets)
+    .innerJoin(workouts, eq(workouts.id, sets.workoutId))
+    .innerJoin(exerciseMuscles, eq(exerciseMuscles.exerciseId, sets.exerciseId))
+    .where(and(
+      eq(workouts.userId, userId),
+      eq(sets.isWarmup, false),
+      gte(workouts.localDate, shiftDate(today, -days)),
+    ));
+
+  const byDate = new Map<string, number>();
+  for (const row of rows) {
+    if (!LOWER_BODY.includes(row.muscle as Muscle)) continue;
+    byDate.set(row.localDate, (byDate.get(row.localDate) ?? 0) + row.contribution);
+  }
+
+  return [...byDate.entries()]
+    .filter(([, hardSets]) => hardSets >= LOWER_BODY_DAY_THRESHOLD)
+    .map(([date]) => date)
+    .sort();
+}
+
+export async function getWeeklyRunningSummary(userId: string, today: string) {
+  const [row] = await db.select().from(weeklyRunningSummaries)
+    .where(and(
+      eq(weeklyRunningSummaries.userId, userId),
+      eq(weeklyRunningSummaries.weekStart, weekStartOf(today)),
+    ))
+    .limit(1);
+  return row ?? null;
+}
+
+export async function getRecentWeeklyRunningSummaries(userId: string, limit = 8) {
+  return db.select().from(weeklyRunningSummaries)
+    .where(eq(weeklyRunningSummaries.userId, userId))
+    .orderBy(desc(weeklyRunningSummaries.weekStart))
+    .limit(limit);
 }

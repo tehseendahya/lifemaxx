@@ -7,6 +7,7 @@ import { MODELS } from "@/lib/models";
 import { buildCoachContext } from "@/lib/llm/context";
 import { localDate } from "@/lib/queries";
 import { sendPush } from "@/lib/push";
+import { generateWeeklyRunningSummary } from "@/lib/running";
 
 export const maxDuration = 60;
 
@@ -20,6 +21,17 @@ export async function GET(req: Request) {
 
   for (const user of users) {
     const today = localDate(user.tz);
+
+    // The running rollup stands on its own: it has its own data, its own
+    // threshold and its own screen, so a thin nutrition week must not suppress
+    // it. Half-marathon prep is a dated goal.
+    try {
+      const running = await generateWeeklyRunningSummary(user.id, user.goalsText, today);
+      if (running) await sendPush(user.id, { title: "Running week", body: running, url: "/runs" });
+    } catch (err) {
+      console.error("[cron/weekly] running", err);
+    }
+
     const { prefix, loggedDays } = await withUser(user.id, () =>
       buildCoachContext(user.id, today));
 
