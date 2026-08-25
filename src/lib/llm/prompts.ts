@@ -11,6 +11,8 @@
  * that hard to get wrong.
  */
 
+import type { ContentPart, Message } from "./provider";
+
 /** Deterministic key order. An unsorted object is a silent cache invalidator. */
 export function stableJson(value: unknown): string {
   const sort = (v: unknown): unknown => {
@@ -87,3 +89,42 @@ A mechanical baseline has already been computed from the lifter's history and is
 - Your suggestion will be clamped to at most one increment from the baseline, so do not propose large jumps; they will be silently reduced.
 - The reason must reference the actual data, not generic advice. "Every set was RPE 7 and none to failure" is a reason. "Progressive overload is important" is not.
 - One sentence. Weights in pounds.`;
+
+/**
+ * The meal-analysis request, assembled where it can be tested.
+ *
+ * `detail` is the decision worth arguing about. It was "low", which caps the
+ * image at 512x512 and bills a flat ~85 tokens — but the spec calls portion
+ * estimation "the one genuinely hard call", and 512px is not enough pixels to
+ * tell a 4oz chicken thigh from a 7oz one. "high" tiles the 1024px upload and
+ * costs roughly a thousand extra input tokens: about fifteen cents a month at
+ * four meals a day, against the accuracy of the only number the app cannot
+ * recompute later.
+ */
+export const MEAL_IMAGE_DETAIL = "high" as const;
+
+export function mealMessages(
+  goalsText: string,
+  imageDataUrl: string | undefined,
+  note: string | undefined,
+): Message[] {
+  // Prefix order is load-bearing: goals and system prompt are stable across
+  // every call, so they sit in front and stay in the cache.
+  const messages: Message[] = [
+    { role: "system", content: `${goalsBlock(goalsText)}\n\n${MEAL_SYSTEM}` },
+  ];
+
+  const parts: ContentPart[] = [];
+  if (imageDataUrl) {
+    parts.push({ type: "image_url", image_url: { url: imageDataUrl, detail: MEAL_IMAGE_DETAIL } });
+  }
+  parts.push({
+    type: "text",
+    text: note?.trim()
+      ? `The person's note about this meal: "${note.trim()}"\n\nTrust the note over the image where they disagree.`
+      : "No note provided. Estimate from the image alone and set confidence accordingly.",
+  });
+  messages.push({ role: "user", content: parts });
+
+  return messages;
+}

@@ -1,8 +1,8 @@
 import { route } from "@/lib/api";
 import { withUser } from "@/db";
-import { getLlm, JSON_SCHEMAS, mealAnalysisSchema, type Message, type ContentPart } from "@/lib/llm";
+import { getLlm, JSON_SCHEMAS, mealAnalysisSchema } from "@/lib/llm";
 import { MODELS } from "@/lib/models";
-import { MEAL_SYSTEM, goalsBlock } from "@/lib/llm/prompts";
+import { mealMessages } from "@/lib/llm/prompts";
 import { getProfile } from "@/lib/queries";
 
 interface Body {
@@ -20,27 +20,9 @@ export const POST = route<Body>(async ({ userId, body }) => {
   // RouteOptions.scope in lib/api.ts for why the two must not overlap.
   const profile = await withUser(userId, () => getProfile(userId));
 
-  // Prefix order is load-bearing: goals and system prompt are stable across
-  // every call, so they sit in front and stay in the cache.
-  const messages: Message[] = [
-    { role: "system", content: `${goalsBlock(profile?.goalsText ?? "")}\n\n${MEAL_SYSTEM}` },
-  ];
-
-  const parts: ContentPart[] = [];
-  if (body.imageDataUrl) {
-    parts.push({ type: "image_url", image_url: { url: body.imageDataUrl, detail: "low" } });
-  }
-  parts.push({
-    type: "text",
-    text: body.note?.trim()
-      ? `The person's note about this meal: "${body.note.trim()}"\n\nTrust the note over the image where they disagree.`
-      : "No note provided. Estimate from the image alone and set confidence accordingly.",
-  });
-  messages.push({ role: "user", content: parts });
-
   const analysis = await getLlm().structured({
     model: MODELS.mealAnalyze,
-    messages,
+    messages: mealMessages(profile?.goalsText ?? "", body.imageDataUrl, body.note),
     schemaName: "meal_analysis",
     jsonSchema: JSON_SCHEMAS.meal_analysis,
     validator: mealAnalysisSchema,

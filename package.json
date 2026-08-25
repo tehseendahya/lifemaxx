@@ -15,7 +15,8 @@
     "db:push": "npm run db:migrate",
     "db:seed": "tsx src/db/seed.ts",
     "db:migrate": "tsx scripts/migrate.ts",
-    "db:verify": "tsx scripts/verify-db.ts"
+    "db:verify": "tsx scripts/verify-db.ts",
+    "llm:preflight": "tsx scripts/preflight-llm.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
