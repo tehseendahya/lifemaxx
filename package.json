@@ -17,7 +17,8 @@
     "db:migrate": "tsx scripts/migrate.ts",
     "db:verify": "tsx scripts/verify-db.ts",
     "llm:preflight": "tsx scripts/preflight-llm.ts",
-    "strava:verify": "tsx scripts/verify-strava.ts"
+    "strava:verify": "tsx scripts/verify-strava.ts",
+    "push:verify": "tsx scripts/verify-push.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
