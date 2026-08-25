@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { currentUserId } from "@/lib/supabase/server";
+import { withUser } from "@/db";
 import { redirect } from "next/navigation";
 import {
   getProfile, localDate, getDayMeals, sumMacros, getMuscleVolume,
@@ -17,20 +18,24 @@ export default async function Today() {
   const userId = await currentUserId();
   if (!userId) redirect("/login");
 
-  const profile = await getProfile(userId);
-  const tz = profile?.tz ?? "America/New_York";
-  const today = localDate(tz);
-
-  const [meals, volume, target, tdee, proteinFloor, active, runs, lowerBodyDates] = await Promise.all([
-    getDayMeals(userId, today),
-    getMuscleVolume(userId, today),
-    getActiveTarget(userId, today),
-    getTdee(userId, today),
-    defaultProteinTarget(userId),
-    getActiveWorkout(userId),
-    getRuns(userId, today),
-    getLowerBodyLiftDates(userId, today),
-  ]);
+  // Read inside a user scope, so the RLS policies do the filtering here the
+  // same way they do in the API routes. See withUser() in src/db/index.ts.
+  const { today, meals, volume, target, tdee, proteinFloor, active, runs, lowerBodyDates } =
+    await withUser(userId, async () => {
+      const profile = await getProfile(userId);
+      const today = localDate(profile?.tz ?? "America/New_York");
+      const [meals, volume, target, tdee, proteinFloor, active, runs, lowerBodyDates] = await Promise.all([
+        getDayMeals(userId, today),
+        getMuscleVolume(userId, today),
+        getActiveTarget(userId, today),
+        getTdee(userId, today),
+        defaultProteinTarget(userId),
+        getActiveWorkout(userId),
+        getRuns(userId, today),
+        getLowerBodyLiftDates(userId, today),
+      ]);
+      return { today, meals, volume, target, tdee, proteinFloor, active, runs, lowerBodyDates };
+    });
 
   const running = summarizeRunningWeek(runs, lowerBodyDates, weekStartOf(today));
 
