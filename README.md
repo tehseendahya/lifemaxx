@@ -111,7 +111,7 @@ full-screen layout.
 |---|---|
 | `npm run dev` | Development server |
 | `npm run build` | Production build |
-| `npm test` | Domain, parser, LLM-contract and outbox tests (133, no network) |
+| `npm test` | Domain, parser, LLM-contract, outbox and export-parser tests (158, no network) |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run db:migrate` | Apply `drizzle/*.sql` in order |
 | `npm run db:seed` | Load/refresh the exercise catalogue (idempotent) |
@@ -121,6 +121,7 @@ full-screen layout.
 | `npm run strava:verify` | Prove the nightly Strava pull is idempotent |
 | `npm run push:verify` | Check VAPID keys and the push signing path |
 | `npm run llm:preflight` | Call the live OpenAI API once per route |
+| `npm run runs:import` | Import a Strava account archive (no API subscription needed) |
 
 ### Verifying
 
@@ -182,9 +183,37 @@ sorts keys. Break that ordering and you silently pay full price all session.
 
 Both are wired up and will start working the moment you add credentials.
 
-**Strava** — create an app at [strava.com/settings/api](https://www.strava.com/settings/api),
-set `STRAVA_CLIENT_ID` and `STRAVA_CLIENT_SECRET`, then hit **Connect** in
-Settings. Activities pull nightly.
+**Strava** — two ways in, because as of June 2026 Strava requires an active
+Strava subscription to create an API application, hobby and personal use
+included.
+
+*With a subscription:* create an app at
+[strava.com/settings/api](https://www.strava.com/settings/api) — the
+Authorization Callback Domain is the bare deployment domain, no scheme and no
+path — set `STRAVA_CLIENT_ID` and `STRAVA_CLIENT_SECRET`, redeploy so the new
+variables reach a running deployment, then hit **Connect** in Settings.
+Activities pull nightly.
+
+*Without one:* the account archive is free and holds the same activities.
+Request it under **Settings → My Account → Download or Delete Your Account**,
+unzip it, then:
+
+```bash
+npm run runs:import -- ~/Downloads/export_12345 --dry-run   # look first
+npm run runs:import -- ~/Downloads/export_12345
+```
+
+Imported rows are stored as provider `strava` under Strava's own activity id,
+so they land on the same `(user_id, provider, external_id)` unique index the
+nightly pull uses. Re-importing a newer archive updates in place rather than
+duplicating, and if a subscription ever appears the API sync converges onto
+these same rows. `--dry-run` prints the parse — counts by type, and the most
+recent activity — without writing anything.
+
+The export repeats several column names: `Distance` appears twice, once
+formatted in the athlete's own units and once in metres. The importer picks the
+larger column, because guessing wrong is a 1000x error that would quietly
+rewrite every mileage number in the app.
 
 **Push notifications** — generate keys once:
 
@@ -252,4 +281,5 @@ a build container:
       the request shapes are covered by contract tests, but no call has ever
       reached `api.openai.com`, so the model ids are unproven
 - [ ] The Strava OAuth round trip end to end (the nightly pull's idempotency is
-      already proven by `strava:verify`)
+      already proven by `strava:verify`). Needs a Strava subscription as of
+      June 2026 — `npm run runs:import` is the route in without one.

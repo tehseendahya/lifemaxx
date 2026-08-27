@@ -20,7 +20,8 @@
     "strava:verify": "tsx scripts/verify-strava.ts",
     "push:verify": "tsx scripts/verify-push.ts",
     "dev:setup": "tsx scripts/dev-setup.ts",
-    "db:seed:demo": "tsx scripts/seed-demo.ts"
+    "db:seed:demo": "tsx scripts/seed-demo.ts",
+    "runs:import": "tsx scripts/import-activities.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
