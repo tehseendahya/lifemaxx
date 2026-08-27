@@ -139,3 +139,22 @@ export function memoryStore(initial: OutboxItem[] = []): OutboxStore {
     async remove(id) { items.delete(id); },
   };
 }
+
+export function newClientId(): string {
+  const c = globalThis.crypto;
+  if (c?.randomUUID) return c.randomUUID();
+
+  // `crypto.randomUUID` only exists in a secure context, so it is missing on
+  // plain HTTP — a phone hitting a LAN IP, which is exactly how this app gets
+  // tested before it has a domain. The old fallback returned
+  // `19a3f2c1b40-4f2a9c1e`, which is not a UUID, and `sets.client_id` is a
+  // uuid column: every queued set failed to deliver with a 500, breaking the
+  // offline path in the one situation it exists for. Build a real v4 instead.
+  const b = new Uint8Array(16);
+  if (c?.getRandomValues) c.getRandomValues(b);
+  else for (let i = 0; i < 16; i += 1) b[i] = Math.floor(Math.random() * 256);
+  b[6] = (b[6] & 0x0f) | 0x40; // version 4
+  b[8] = (b[8] & 0x3f) | 0x80; // variant 10xx
+  const h = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}

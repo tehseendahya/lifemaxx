@@ -1,7 +1,7 @@
 "use client";
 import Dexie, { type Table } from "dexie";
 import {
-  flush, memoryStore, classifyStatus,
+  flush, memoryStore, classifyStatus, newClientId,
   type OutboxItem, type OutboxStore, type Send, type FlushResult,
 } from "./queue";
 
@@ -105,10 +105,6 @@ export const outboxState = (): OutboxState => state;
 
 // --------------------------------------------------------------- public API
 
-export function newClientId(): string {
-  return globalThis.crypto?.randomUUID?.() ??
-    `${Date.now().toString(16)}-${Math.random().toString(16).slice(2, 10)}`;
-}
 
 /**
  * Queues a set and kicks off delivery without waiting for it.

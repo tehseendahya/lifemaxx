@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  flush, memoryStore, backoffMs, classifyStatus, MAX_ATTEMPTS,
+  flush, memoryStore, backoffMs, classifyStatus, MAX_ATTEMPTS, newClientId,
   type OutboxItem, type Send,
 } from "./queue";
 
@@ -147,5 +147,51 @@ describe("flush", () => {
     const result = await flush(store, send, 120_000);
     expect(result.sent).toBe(3);
     expect(await store.all()).toEqual([]);
+  });
+});
+
+
+/**
+ * `sets.client_id` is a uuid column, and this value is what makes a retried
+ * set land on the row the first attempt wrote instead of duplicating it. If it
+ * is not a well-formed uuid the insert fails outright — so the shape is a
+ * correctness requirement, not cosmetics.
+ */
+describe("newClientId", () => {
+  const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+  it("produces a v4 uuid when crypto.randomUUID exists", () => {
+    expect(newClientId()).toMatch(UUID_V4);
+  });
+
+  it("still produces a v4 uuid without crypto.randomUUID", () => {
+    // The secure-context case: plain HTTP on a LAN IP, which is how the app
+    // gets opened on a phone before it has a domain. randomUUID is absent
+    // there, and the fallback used to return a non-uuid that Postgres rejected.
+    const real = globalThis.crypto;
+    try {
+      Object.defineProperty(globalThis, "crypto", {
+        value: { getRandomValues: real.getRandomValues.bind(real) },
+        configurable: true,
+      });
+      for (let i = 0; i < 50; i += 1) expect(newClientId()).toMatch(UUID_V4);
+    } finally {
+      Object.defineProperty(globalThis, "crypto", { value: real, configurable: true });
+    }
+  });
+
+  it("still produces a v4 uuid with no crypto at all", () => {
+    const real = globalThis.crypto;
+    try {
+      Object.defineProperty(globalThis, "crypto", { value: undefined, configurable: true });
+      for (let i = 0; i < 50; i += 1) expect(newClientId()).toMatch(UUID_V4);
+    } finally {
+      Object.defineProperty(globalThis, "crypto", { value: real, configurable: true });
+    }
+  });
+
+  it("does not repeat", () => {
+    const seen = new Set(Array.from({ length: 500 }, () => newClientId()));
+    expect(seen.size).toBe(500);
   });
 });
