@@ -22,3 +22,14 @@ export function authorizeCron(req: Request): NextResponse | null {
   }
   return null;
 }
+
+/**
+ * Day of week for an ISO date (`YYYY-MM-DD`), Sunday = 0.
+ *
+ * Parsed as UTC deliberately: the string already carries whatever timezone
+ * produced it, so re-interpreting it in the server's local zone would shift
+ * the day across midnight.
+ */
+export function weekdayOf(iso: string): number {
+  return new Date(`${iso}T00:00:00Z`).getUTCDay();
+}

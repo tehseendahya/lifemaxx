@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { cronAuthorized } from "./cron";
+import { cronAuthorized, weekdayOf } from "./cron";
 
 /**
  * These three endpoints are public URLs that spend money on model calls, so
@@ -33,5 +33,28 @@ describe("cron authorization", () => {
   it("refuses everything when no secret is configured", () => {
     expect(cronAuthorized("Bearer anything", undefined)).toBe(false);
     expect(cronAuthorized("Bearer ", "")).toBe(false);
+  });
+});
+
+/**
+ * The dispatcher shares one Hobby cron slot between the Strava pull and the
+ * Sunday review, so this predicate is the only thing deciding whether the
+ * weekly review runs at all. Off by one and it never fires, or fires daily.
+ */
+describe("weekdayOf", () => {
+  it("returns 0 for a Sunday", () => {
+    expect(weekdayOf("2026-08-30")).toBe(0);
+  });
+
+  it("returns the other six days correctly", () => {
+    expect(weekdayOf("2026-08-31")).toBe(1); // Mon
+    expect(weekdayOf("2026-09-05")).toBe(6); // Sat
+  });
+
+  it("does not shift the day when the server is behind UTC", () => {
+    // Parsed as UTC, not local: in a US timezone `new Date("2026-08-30")`
+    // interpreted locally lands on the 29th and the review never runs.
+    expect(weekdayOf("2026-08-30")).toBe(0);
+    expect(weekdayOf("2026-01-01")).toBe(4);
   });
 });
