@@ -27,7 +27,7 @@ export function FoodClient({ meals, totals, kcalTarget, proteinTarget }: {
   }
 
   return (
-    <Screen title="Food" subtitle="Photo or text — the note matters more than the picture">
+    <Screen title="Food" subtitle="Photo or text — the note matters more than the picture" wide>
       <MealCapture onSaved={() => router.refresh()} />
 
       <Card className="mb-4">

@@ -1,18 +1,36 @@
 import type { ReactNode } from "react";
 
-export function Screen({ title, subtitle, children, action }: {
+export function Screen({ title, subtitle, children, action, wide = false }: {
   title: string; subtitle?: ReactNode; children: ReactNode; action?: ReactNode;
+  /**
+   * Let the content use the full laptop width as two flowing columns.
+   *
+   * For screens that are a stack of independent cards — a dashboard — two
+   * columns fill the space and keep everything above the fold. For screens that
+   * are one thing you read or type into, a column capped near 42rem stays
+   * legible; text set 160 characters wide is worse, not better, than text set
+   * 70. So this is opt-in per screen rather than a global width.
+   */
+  wide?: boolean;
 }) {
   return (
-    <div className="pt-8">
-      <header className="mb-5 flex items-start justify-between gap-3">
+    <div className="pt-8 lg:pt-12">
+      <header className="mb-5 flex items-start justify-between gap-3 lg:mb-7">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+          <h1 className="text-2xl font-semibold tracking-tight lg:text-3xl">{title}</h1>
           {subtitle && <p className="mt-1 text-sm text-muted">{subtitle}</p>}
         </div>
         {action}
       </header>
-      {children}
+      {/*
+        CSS columns rather than a grid: the cards are variable height and
+        already carry their own bottom margin, so they flow into a second
+        column with no per-page markup change. break-inside-avoid stops a card
+        being sliced in half across the gutter.
+      */}
+      <div className={wide ? "lg:columns-2 lg:gap-5 [&>*]:break-inside-avoid" : "lg:max-w-2xl"}>
+        {children}
+      </div>
     </div>
   );
 }

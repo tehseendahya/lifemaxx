@@ -44,6 +44,7 @@ export default async function Runs() {
     <Screen
       title="Running"
       subtitle={runs.length > 0 ? `${week.totalMi} miles logged in the last 8 weeks` : undefined}
+      wide
     >
       {runs.length === 0 ? (
         <Empty>

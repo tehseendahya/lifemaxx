@@ -52,7 +52,7 @@ export function SettingsClient({ goalsText, email, currentWeightLb, tdee, propos
   }
 
   return (
-    <Screen title="You" subtitle={email}>
+    <Screen title="You" subtitle={email} wide>
       {/* Weigh-in first: it's the daily action, and it's the input the whole
           TDEE loop depends on. Everything else here is set-and-forget. */}
       <Card className="mb-4">

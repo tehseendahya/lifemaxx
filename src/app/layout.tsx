@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
-import { TabBar } from "@/components/TabBar";
+import { TabBar, SideNav } from "@/components/TabBar";
+import { Shell } from "@/components/Shell";
 import { ServiceWorker } from "@/components/ServiceWorker";
 
 export const metadata: Metadata = {
@@ -23,7 +24,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body>
-        <main className="mx-auto max-w-lg px-4">{children}</main>
+        <SideNav />
+        {/*
+          One column on a phone, sidebar plus a wide canvas on a laptop. The
+          rail is fixed rather than in flow, so the content column scrolls
+          under it and the navigation never moves — hence the matching gutter,
+          which Shell drops on the screens that have no sidebar.
+        */}
+        <Shell>{children}</Shell>
         <TabBar />
         <ServiceWorker />
       </body>

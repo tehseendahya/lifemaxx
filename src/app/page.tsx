@@ -47,6 +47,7 @@ export default async function Today() {
     <Screen
       title="Today"
       subtitle={new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
+      wide
     >
       {active && (
         <Link href="/lift" className="mb-4 block">
