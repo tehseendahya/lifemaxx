@@ -36,4 +36,11 @@ CREATE POLICY own_weekly_running_summaries ON weekly_running_summaries FOR ALL
   WITH CHECK (user_id = app.current_user_id());--> statement-breakpoint
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE weekly_running_summaries TO lifemaxx_app;--> statement-breakpoint
-REVOKE ALL ON TABLE weekly_running_summaries FROM anon;
+
+-- Guarded for the same reason as the revokes in 0001: anon exists on Supabase
+-- and nowhere else.
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL ON TABLE weekly_running_summaries FROM anon';
+  END IF;
+END $$;

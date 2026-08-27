@@ -48,16 +48,28 @@ EXCEPTION WHEN OTHERS THEN NULL; END $$;--> statement-breakpoint
 GRANT USAGE ON SCHEMA public TO lifemaxx_app;--> statement-breakpoint
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO lifemaxx_app;--> statement-breakpoint
 
--- anon is pre-authentication. It has no business reading any of this.
-REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon;--> statement-breakpoint
--- Supabase's default privileges re-grant to anon for every table created
--- afterwards, so revoke the default too or the next migration reopens this.
-ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM anon;--> statement-breakpoint
+-- `anon` and `authenticated` are PostgREST's roles. Supabase creates them; a
+-- plain PostgreSQL has never heard of them, and naming one that does not exist
+-- aborts the whole migration -- which is what made `npm run db:migrate` fail
+-- against local Postgres, and with it every attempt to run the app without a
+-- Supabase project. Guarded so the statements apply where the roles exist and
+-- are skipped where they do not.
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    -- anon is pre-authentication. It has no business reading any of this.
+    EXECUTE 'REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon';
+    -- Supabase's default privileges re-grant to anon for every table created
+    -- afterwards, so revoke the default too or the next migration reopens this.
+    EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM anon';
+  END IF;
 
--- OAuth refresh tokens and push credentials are server-only secrets. RLS would
--- scope them to their owner, but their owner has no reason to read them from a
--- browser either, so they are not granted to the PostgREST roles at all.
-REVOKE ALL ON TABLE strava_accounts, push_subscriptions FROM authenticated;--> statement-breakpoint
+  -- OAuth refresh tokens and push credentials are server-only secrets. RLS
+  -- would scope them to their owner, but their owner has no reason to read
+  -- them from a browser either, so they are not granted to PostgREST at all.
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL ON TABLE strava_accounts, push_subscriptions FROM authenticated';
+  END IF;
+END $$;--> statement-breakpoint
 
 ALTER TABLE profiles           ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
 ALTER TABLE goal_history       ENABLE ROW LEVEL SECURITY;--> statement-breakpoint

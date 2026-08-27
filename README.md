@@ -71,17 +71,31 @@ To force offline mode even with a key present, set `LLM_PROVIDER=fixtures`.
 npm run dev
 ```
 
-**Without a reachable Supabase**, magic-link sign-in can't complete, so every
-screen redirects to `/login`. To look at the app anyway — against a local
-Postgres, say — seed a demo user and skip the auth round trip:
+### Running it with no Supabase at all
+
+Magic-link sign-in needs a reachable Supabase, so without one every screen
+redirects to `/login` and there is nothing to look at. One command gets you a
+working app against any Postgres:
 
 ```bash
-npx tsx scripts/seed-demo.ts     # a month of meals, lifts, runs, weigh-ins
-echo "DEV_USER_ID=0de00000-0000-4000-8000-000000000001" >> .env.local
+npm run dev:setup     # migrate, seed the catalogue, write demo data, set DEV_USER_ID
 npm run dev
 ```
 
-`DEV_USER_ID` authenticates every request as that user. It is inert unless the
+No Postgres to hand?
+
+```bash
+docker run -d --name lifemaxx-pg -p 5432:5432 \
+  -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=lifemaxx postgres:16
+```
+
+then put `DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/lifemaxx`
+in `.env.local` and run `npm run dev:setup`.
+
+`dev:setup` writes a month of demo data — meals, six lift sessions with a real
+progression on bench, six runs, and enough weigh-ins for the TDEE estimate to
+clear its 8-sample floor — then points `DEV_USER_ID` at that user.
+`DEV_USER_ID` authenticates every request as them. It is inert unless the
 variable is set, and `next build` sets `NODE_ENV=production`, which switches it
 off entirely — so it cannot reach a deployed bundle, Vercel previews included.
 
@@ -101,6 +115,8 @@ full-screen layout.
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run db:migrate` | Apply `drizzle/*.sql` in order |
 | `npm run db:seed` | Load/refresh the exercise catalogue (idempotent) |
+| `npm run dev:setup` | Migrate, seed, write demo data, set `DEV_USER_ID` |
+| `npm run db:seed:demo` | Rewrite just the demo user's data |
 | `npm run db:verify` | Check extensions, generated columns and RLS isolation |
 | `npm run strava:verify` | Prove the nightly Strava pull is idempotent |
 | `npm run push:verify` | Check VAPID keys and the push signing path |

@@ -72,19 +72,29 @@ async function main() {
   );
   check("lifemaxx_app does not bypass RLS", appRoleBypasses === false);
 
-  const anonGrants = await scalar<number>(sql`
-    select count(*)::int from information_schema.role_table_grants
-    where grantee = 'anon' and table_schema = 'public'
-  `);
-  check("anon has no table privileges", Number(anonGrants) === 0,
-    "the anon key is public; this is the PostgREST hole");
+  // These two only mean anything where PostgREST's roles exist. On a plain
+  // Postgres they would pass for the wrong reason — nothing to grant to — and a
+  // check that cannot fail is worse than no check, because it reads as proof.
+  const hasAnon = await scalar<boolean>(sql`select exists (select 1 from pg_roles where rolname = 'anon')`);
 
-  const secretGrants = await scalar<number>(sql`
-    select count(*)::int from information_schema.role_table_grants
-    where grantee in ('anon', 'authenticated')
-      and table_name in ('strava_accounts', 'push_subscriptions')
-  `);
-  check("OAuth and push secrets unreachable from the browser roles", Number(secretGrants) === 0);
+  if (!hasAnon) {
+    console.log("  n/a  anon and authenticated do not exist here — PostgREST grants not applicable");
+    console.log("       (run this against the real Supabase project to check them)");
+  } else {
+    const anonGrants = await scalar<number>(sql`
+      select count(*)::int from information_schema.role_table_grants
+      where grantee = 'anon' and table_schema = 'public'
+    `);
+    check("anon has no table privileges", Number(anonGrants) === 0,
+      "the anon key is public; this is the PostgREST hole");
+
+    const secretGrants = await scalar<number>(sql`
+      select count(*)::int from information_schema.role_table_grants
+      where grantee in ('anon', 'authenticated')
+        and table_name in ('strava_accounts', 'push_subscriptions')
+    `);
+    check("OAuth and push secrets unreachable from the browser roles", Number(secretGrants) === 0);
+  }
 
   console.log("\nisolation, through the app's own query layer");
 

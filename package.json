@@ -18,7 +18,9 @@
     "db:verify": "tsx scripts/verify-db.ts",
     "llm:preflight": "tsx scripts/preflight-llm.ts",
     "strava:verify": "tsx scripts/verify-strava.ts",
-    "push:verify": "tsx scripts/verify-push.ts"
+    "push:verify": "tsx scripts/verify-push.ts",
+    "dev:setup": "tsx scripts/dev-setup.ts",
+    "db:seed:demo": "tsx scripts/seed-demo.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",

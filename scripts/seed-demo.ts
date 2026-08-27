@@ -203,4 +203,7 @@ async function main() {
   process.exit(0);
 }
 
-main().catch((err) => { console.error(err); process.exit(1); });
+// Only run when invoked directly — dev-setup.ts imports DEMO_USER from here.
+if (process.argv[1]?.endsWith("seed-demo.ts")) {
+  main().catch((err) => { console.error(err); process.exit(1); });
+}
