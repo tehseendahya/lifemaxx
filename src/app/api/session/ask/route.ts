@@ -2,7 +2,7 @@ import { currentUserId } from "@/lib/supabase/server";
 import { getLlm } from "@/lib/llm";
 import { MODELS } from "@/lib/models";
 import { sessionMessagesFor } from "@/lib/llm/context";
-import { db } from "@/db";
+import { db, withUser } from "@/db";
 import { sessionMessages } from "@/db/schema";
 import { getActiveWorkout, getProfile, localDate } from "@/lib/queries";
 
@@ -17,16 +17,26 @@ export async function POST(req: Request) {
   const { question } = (await req.json()) as { question?: string };
   if (!question?.trim()) return new Response("Ask something.", { status: 400 });
 
-  const active = await getActiveWorkout(userId);
-  if (!active) return new Response("No active session.", { status: 400 });
+  // Context assembly and the question's own row, in one scoped transaction.
+  // The stream that follows deliberately runs outside it: holding a Postgres
+  // transaction open for the length of a model response would pin a pooler
+  // connection for every second the coach is talking.
+  const prepared = await withUser(userId, async () => {
+    const active = await getActiveWorkout(userId);
+    if (!active) return null;
 
-  const profile = await getProfile(userId);
-  const today = localDate(profile?.tz ?? "America/New_York");
-  const messages = await sessionMessagesFor(userId, active.id, today, question.trim());
+    const profile = await getProfile(userId);
+    const today = localDate(profile?.tz ?? "America/New_York");
+    const messages = await sessionMessagesFor(userId, active.id, today, question.trim());
 
-  await db.insert(sessionMessages).values({
-    workoutId: active.id, role: "user", content: question.trim(),
+    await db.insert(sessionMessages).values({
+      workoutId: active.id, role: "user", content: question.trim(),
+    });
+    return { workoutId: active.id, messages };
   });
+
+  if (!prepared) return new Response("No active session.", { status: 400 });
+  const { workoutId, messages } = prepared;
 
   const encoder = new TextEncoder();
   let full = "";
@@ -46,9 +56,9 @@ export async function POST(req: Request) {
         console.error("[session/ask]", err);
       } finally {
         if (full.trim()) {
-          await db.insert(sessionMessages).values({
-            workoutId: active.id, role: "assistant", content: full,
-          });
+          await withUser(userId, () => db.insert(sessionMessages).values({
+            workoutId, role: "assistant", content: full,
+          }));
         }
         controller.close();
       }

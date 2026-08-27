@@ -56,6 +56,14 @@ export const exerciseMatchSchema = z.object({
 });
 export type ExerciseMatch = z.infer<typeof exerciseMatchSchema>;
 
+export const runVerdictsSchema = z.object({
+  verdicts: z.array(z.object({
+    index: z.number().int().nonnegative(),
+    verdict: z.string(),
+  })),
+});
+export type RunVerdicts = z.infer<typeof runVerdictsSchema>;
+
 /**
  * OpenAI structured outputs require every property to be listed in `required`
  * and `additionalProperties: false` throughout. Hand-writing both the Zod and
@@ -102,6 +110,15 @@ export const JSON_SCHEMAS = {
     },
   }),
   suggestion: obj({ weight_lb: num, sets: num, reps: num, reason: str }),
+  run_verdicts: obj({
+    verdicts: {
+      type: "array",
+      // Keyed by index rather than by row id: asking a model to echo a UUID
+      // back verbatim is a coin flip, and a mis-copied one writes the verdict
+      // onto the wrong run.
+      items: obj({ index: num, verdict: str }),
+    },
+  }),
   exercise_match: obj({
     matched_slug: nullable(str),
     is_new: bool,

@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "../../load-env";
 import { db } from "./index";
 import { exercises, exerciseAliases, exerciseMuscles, type Muscle } from "./schema";
 import { CATALOGUE } from "./catalogue";

@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { authorizeCron } from "@/lib/cron";
-import { db } from "@/db";
+import { adminDb, withUser } from "@/db";
 import { profiles } from "@/db/schema";
 import { getLlm } from "@/lib/llm";
 import { MODELS } from "@/lib/models";
 import { buildCoachContext } from "@/lib/llm/context";
 import { localDate } from "@/lib/queries";
 import { sendPush } from "@/lib/push";
+import { generateWeeklyRunningSummary } from "@/lib/running";
 
 export const maxDuration = 60;
 
@@ -15,11 +16,24 @@ export async function GET(req: Request) {
   const denied = authorizeCron(req);
   if (denied) return denied;
 
-  const users = await db.select().from(profiles);
+  // The only cross-user step; everything below is scoped to one user.
+  const users = await adminDb.select().from(profiles);
 
   for (const user of users) {
     const today = localDate(user.tz);
-    const { prefix, loggedDays } = await buildCoachContext(user.id, today);
+
+    // The running rollup stands on its own: it has its own data, its own
+    // threshold and its own screen, so a thin nutrition week must not suppress
+    // it. Half-marathon prep is a dated goal.
+    try {
+      const running = await generateWeeklyRunningSummary(user.id, user.goalsText, today);
+      if (running) await sendPush(user.id, { title: "Running week", body: running, url: "/runs" });
+    } catch (err) {
+      console.error("[cron/weekly] running", err);
+    }
+
+    const { prefix, loggedDays } = await withUser(user.id, () =>
+      buildCoachContext(user.id, today));
 
     // Under five logged days the honest answer is that the trend is noise.
     if (loggedDays < 5) continue;

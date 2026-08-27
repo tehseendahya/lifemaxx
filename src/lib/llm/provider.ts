@@ -25,12 +25,16 @@ export interface StructuredRequest<T> {
   jsonSchema: object;
   validator: z.ZodType<T>;
   maxTokens?: number;
+  /** Per-route wall-clock budget. A mid-set question and a meal photo are not
+   *  worth waiting the same length of time for. */
+  timeoutMs?: number;
 }
 
 export interface TextRequest {
   model: string;
   messages: Message[];
   maxTokens?: number;
+  timeoutMs?: number;
 }
 
 export interface LlmProvider {

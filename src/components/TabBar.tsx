@@ -6,6 +6,7 @@ const TABS = [
   { href: "/", label: "Today", icon: "◎" },
   { href: "/food", label: "Food", icon: "◍" },
   { href: "/lift", label: "Lift", icon: "▮" },
+  { href: "/runs", label: "Runs", icon: "◇" },
   { href: "/coach", label: "Coach", icon: "◆" },
   { href: "/settings", label: "You", icon: "○" },
 ] as const;

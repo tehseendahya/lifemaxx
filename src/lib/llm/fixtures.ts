@@ -25,6 +25,29 @@ function lastUserText(messages: Message[]): string {
   return "";
 }
 
+/** Pulls the JSON array that follows a labelled heading in a prompt. */
+function extractJsonArray(input: string, label: string): unknown[] {
+  const start = input.indexOf(label);
+  if (start === -1) return [];
+  const open = input.indexOf("[", start);
+  if (open === -1) return [];
+
+  let depth = 0;
+  for (let i = open; i < input.length; i++) {
+    if (input[i] === "[") depth += 1;
+    else if (input[i] === "]") {
+      depth -= 1;
+      if (depth === 0) {
+        try {
+          const parsed = JSON.parse(input.slice(open, i + 1));
+          return Array.isArray(parsed) ? parsed : [];
+        } catch { return []; }
+      }
+    }
+  }
+  return [];
+}
+
 /** Stable pseudo-random from a string, so fixtures don't flicker between runs. */
 function hash(s: string): number {
   let h = 2166136261;
@@ -76,6 +99,26 @@ export class FixtureProvider implements LlmProvider {
         };
         break;
       }
+      case "run_verdicts": {
+        // Built from the numbers actually in the prompt rather than from a
+        // template, so the offline running screens show something true.
+        const runs = extractJsonArray(input, "RUNS:");
+        payload = {
+          verdicts: runs.map((run, index) => {
+            const r = run as Record<string, unknown>;
+            const effort = String(r.effort ?? "easy");
+            const clash = r.lifted_legs_within_a_day === true;
+            const head = `${r.miles} mi at ${r.pace_min_mi}/mi`;
+            if (clash && effort !== "easy") {
+              return { index, verdict: `${head} — a ${effort} run inside a day of a leg session; that is the collision to move.` };
+            }
+            if (effort === "long") return { index, verdict: `${head} — the week's long run, and the one to protect.` };
+            if (effort === "hard") return { index, verdict: `${head} — a hard effort, faster than your recent average.` };
+            return { index, verdict: `${head} — easy, right where easy should sit.` };
+          }),
+        };
+        break;
+      }
       case "exercise_match": {
         const name = input.trim().slice(0, 60) || "Unknown Exercise";
         payload = {
@@ -95,7 +138,11 @@ export class FixtureProvider implements LlmProvider {
   }
 
   async text(req: TextRequest): Promise<string> {
-    const q = lastUserText(req.messages).toLowerCase();
+    const raw = lastUserText(req.messages);
+
+    if (raw.startsWith("WEEK OF")) return weeklyRunningFixture(raw);
+
+    const q = raw.toLowerCase();
     if (q.includes("another set")) {
       return "Offline mode — no coach available. Your last set's RPE is the thing to go on: below 8, do another.";
     }
@@ -109,4 +156,36 @@ export class FixtureProvider implements LlmProvider {
     const full = await this.text(req);
     for (const word of full.split(" ")) yield `${word} `;
   }
+}
+
+
+/** An offline weekly running rollup, assembled from the stats in the prompt. */
+function weeklyRunningFixture(raw: string): string {
+  let stats: Record<string, any>;
+  try {
+    stats = JSON.parse(raw.slice(raw.indexOf("{")));
+  } catch {
+    return "Offline mode — no running rollup available without a model.";
+  }
+
+  const now = stats.this_week ?? {};
+  const then = stats.last_week ?? {};
+  const delta = Math.round(((now.distanceMi ?? 0) - (then.distanceMi ?? 0)) * 10) / 10;
+  const direction = delta > 0 ? `up ${delta}` : delta < 0 ? `down ${Math.abs(delta)}` : "flat";
+
+  const trend = stats.pace_trend;
+  const pace = !trend
+    ? "Not enough runs to say anything about pace yet."
+    : !trend.reliable
+      ? `Only ${trend.runs_used} runs in the window — too thin to call a pace trend.`
+      : trend.seconds_per_mile_per_week < 0
+        ? `Pace is trending ${Math.abs(trend.seconds_per_mile_per_week)}s/mi faster per week.`
+        : `Pace is drifting ${trend.seconds_per_mile_per_week}s/mi slower per week.`;
+
+  const clash = (stats.hard_running_stacked_on_leg_days ?? [])[0];
+  const advice = clash
+    ? `Hard running on ${clash.run_date} sat next to a leg day on ${clash.lift_date} — move one.`
+    : "Nothing collided with lifting this week.";
+
+  return `${now.distanceMi ?? 0} miles across ${now.runs ?? 0} runs, ${direction} on last week. ${pace} ${advice} (Offline mode — no model was called.)`;
 }

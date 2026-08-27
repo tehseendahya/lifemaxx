@@ -1,6 +1,6 @@
 import { currentUserId } from "@/lib/supabase/server";
 import { redirect, notFound } from "next/navigation";
-import { db } from "@/db";
+import { db, withUser } from "@/db";
 import { exercises } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { getExerciseHistory } from "@/lib/queries";
@@ -16,10 +16,17 @@ export default async function ExerciseDetail({ params }: { params: Promise<{ slu
   if (!userId) redirect("/login");
 
   const { slug } = await params;
-  const [exercise] = await db.select().from(exercises).where(eq(exercises.id, slug)).limit(1);
-  if (!exercise) notFound();
 
-  const history = await getExerciseHistory(userId, exercise.id, 8);
+  // Read inside a user scope, so the RLS policies do the filtering here the
+  // same way they do in the API routes. This is also what stops a guessed id
+  // in the URL from rendering somebody else's custom exercise.
+  const found = await withUser(userId, async () => {
+    const [exercise] = await db.select().from(exercises).where(eq(exercises.id, slug)).limit(1);
+    if (!exercise) return null;
+    return { exercise, history: await getExerciseHistory(userId, exercise.id, 8) };
+  });
+  if (!found) notFound();
+  const { exercise, history } = found;
   const sessions: PreviousSession[] = history.map((h) => ({
     date: h.date,
     sets: h.sets.map((s) => ({

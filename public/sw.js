@@ -6,8 +6,8 @@
  * be worse than no data — you'd load the wrong last-session numbers and add
  * weight from a stale baseline.
  */
-const SHELL = "lifemaxx-shell-v1";
-const SHELL_URLS = ["/", "/food", "/lift", "/coach", "/settings", "/manifest.webmanifest"];
+const SHELL = "lifemaxx-shell-v2";
+const SHELL_URLS = ["/", "/food", "/lift", "/runs", "/coach", "/settings", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
