@@ -3,9 +3,11 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 /**
- * `adminDb` bypasses row-level security. That is correct for exactly three
- * things — migrations, the catalogue seed, and the cron jobs that iterate every
- * profile before narrowing to one user — and a leak for everything else.
+ * `adminDb` bypasses row-level security. That is correct for a short list —
+ * migrations, the catalogue seed, the cron jobs that iterate every profile
+ * before narrowing to one user, and the health webhook, which has no session
+ * and must look up which profile a payload belongs to before scoping to it —
+ * and a leak for everything else.
  *
  * It is a one-word import away from any file, and the failure mode is silent:
  * the query works, returns everyone's rows, and nothing complains. So the list
@@ -17,6 +19,9 @@ const ALLOWED = new Set([
   "src/app/api/cron/nightly/route.ts",
   "src/app/api/cron/weekly/route.ts",
   "src/app/api/cron/strava/route.ts",
+  // No session on a webhook: it resolves the profile, then writes inside
+  // withUser like everything else.
+  "src/app/api/webhooks/health/route.ts",
 ]);
 
 function walk(dir: string, out: string[] = []): string[] {

@@ -1,18 +1,15 @@
 import { NextResponse } from "next/server";
-import { timingSafeEqual } from "node:crypto";
+import { bearerAuthorized } from "./bearer";
 
 /**
  * Vercel Cron sends `Authorization: Bearer $CRON_SECRET`. Without this check
  * these endpoints are public URLs that spend money on model calls.
+ *
+ * The comparison itself lives in lib/bearer.ts, because the Health Auto Export
+ * webhook needs exactly the same one and a second copy is a second chance to
+ * get a constant-time compare subtly wrong.
  */
-export function cronAuthorized(header: string | null, secret: string | undefined): boolean {
-  if (!secret) return false;
-  const expected = `Bearer ${secret}`;
-  if (!header || header.length !== expected.length) return false;
-  // Constant-time, so the response time cannot be used to walk the secret one
-  // character at a time. These are public URLs on the open internet.
-  return timingSafeEqual(Buffer.from(header), Buffer.from(expected));
-}
+export const cronAuthorized = bearerAuthorized;
 
 export function authorizeCron(req: Request): NextResponse | null {
   const secret = process.env.CRON_SECRET;

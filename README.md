@@ -215,6 +215,29 @@ formatted in the athlete's own units and once in metres. The importer picks the
 larger column, because guessing wrong is a 1000x error that would quietly
 rewrite every mileage number in the app.
 
+*Autonomously, without either:* point
+[Health Auto Export](https://apps.apple.com/us/app/health-auto-export-json-csv/id1115567069)
+at `POST /api/webhooks/health`. Strava's own iOS app writes workouts into Apple
+Health, as does an Apple Watch — so runs reach the app on a schedule with no
+Strava subscription and nothing to run by hand. Set `HEALTH_WEBHOOK_SECRET`,
+then in the app's REST API automation add the header
+`Authorization: Bearer <that secret>` and select JSON.
+
+Rows land as provider `healthkit`, keyed by the stable HealthKit workout id.
+**Turn on Batch Requests** in that automation: it splits a sync across several
+POSTs and resends overlapping windows, so the same workout arrives repeatedly
+by design — every write on this path is an upsert. It also keeps payloads under
+Vercel's 4.5 MB request limit.
+
+Units come from the athlete's own Health settings, so `distance` can arrive in
+`mi` or `km` and weight in `lb` or `kg`. Every quantity is converted by reading
+its own `units` field, and a value whose unit is unrecognised is dropped rather
+than guessed — miles read as kilometres is a 60% error on every run.
+
+A workout that also came from Strava will exist twice, once per provider. That
+is deliberate: two records of the same run with different ids, and merging them
+on a fuzzy time match would be a guess. Pick one source.
+
 **Push notifications** — generate keys once:
 
 ```bash
