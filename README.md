@@ -71,6 +71,20 @@ To force offline mode even with a key present, set `LLM_PROVIDER=fixtures`.
 npm run dev
 ```
 
+**Without a reachable Supabase**, magic-link sign-in can't complete, so every
+screen redirects to `/login`. To look at the app anyway — against a local
+Postgres, say — seed a demo user and skip the auth round trip:
+
+```bash
+npx tsx scripts/seed-demo.ts     # a month of meals, lifts, runs, weigh-ins
+echo "DEV_USER_ID=0de00000-0000-4000-8000-000000000001" >> .env.local
+npm run dev
+```
+
+`DEV_USER_ID` authenticates every request as that user. It is inert unless the
+variable is set, and `next build` sets `NODE_ENV=production`, which switches it
+off entirely — so it cannot reach a deployed bundle, Vercel previews included.
+
 Open on your phone, sign in, then **Add to Home Screen**. That step is not
 cosmetic: iOS only delivers web push to installed PWAs, and it gets you the
 full-screen layout.
