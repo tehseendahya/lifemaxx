@@ -2,13 +2,14 @@ import { useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 
 import {
-  Button, Card, Empty, Label, MacroBar, Screen, Sheet, Spinner,
-  color, space, tnum,
+  Button, Empty, Screen, Sheet, Spinner,
+  color, space,
 } from "@/components/ui";
 import { tapDone, tapError } from "@/lib/haptics";
 import type { MealDto } from "@/lib/types";
 
 import { DateStepper } from "./DateStepper";
+import { FuelCard } from "./FuelCard";
 import { MealCapture } from "./MealCapture";
 import { MealRow } from "./MealRow";
 import {
@@ -19,11 +20,6 @@ import { OFFLINE_SAVE, deleteMeal, describeFailure, saveMeal } from "./requests"
 import { useFoodDay } from "./useFoodDay";
 
 const styles = StyleSheet.create({
-  figureRow: { flexDirection: "row", alignItems: "baseline", gap: space.sm },
-  figure: { ...tnum, color: color.ink, fontSize: 30, fontWeight: "600" },
-  figureTail: { ...tnum, color: color.muted, fontSize: 14, flexShrink: 1 },
-  macros: { marginTop: space.md, gap: 10 },
-
   notice: { color: color.muted, fontSize: 12, lineHeight: 17, marginBottom: space.md },
   bad: { color: color.bad, fontSize: 12, lineHeight: 17, marginBottom: space.md },
 
@@ -157,24 +153,20 @@ export default function FoodScreen() {
         </>
       ) : day.data ? (
         <>
-          <Card>
-            <Label>{stepperLabel}</Label>
-            <View style={styles.figureRow}>
-              <Text style={styles.figure}>{Math.round(day.data.totals.kcal)}</Text>
-              <Text style={styles.figureTail}>
-                {day.data.target.kcal !== null
-                  ? `of ${day.data.target.kcal} kcal`
-                  : "kcal · no target yet, still calibrating"}
-              </Text>
-            </View>
-            <View style={styles.macros}>
-              {/* Protein is `good` because it is the floor to clear rather than
-                  the ceiling to stay under — same treatment as the web app. */}
-              <MacroBar label="Protein" value={day.data.totals.proteinG} target={day.data.target.proteinG} tone="good" />
-              <MacroBar label="Carbs" value={day.data.totals.carbsG} target={day.data.target.carbsG} />
-              <MacroBar label="Fat" value={day.data.totals.fatG} target={day.data.target.fatG} />
-            </View>
-          </Card>
+          {/*
+            Protein used to be the only one of the four with a target, and the
+            other three rendered an empty grey track — which reads as "you have
+            eaten none of these" rather than "there is no target yet". That is
+            calibration mode (§5.5 of SPEC.md) working exactly as specified and
+            rendered exactly wrong. `FuelCard` draws what is known and says what
+            is happening; `calibration.ts` decides which is which.
+          */}
+          <FuelCard
+            label={stepperLabel}
+            totals={day.data.totals}
+            target={day.data.target}
+            tdee={day.tdee}
+          />
 
           {day.data.meals.length === 0 ? (
             <Empty>

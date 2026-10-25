@@ -9,6 +9,8 @@ import {
   emptyDraftItem,
   formatIsoDateLabel,
   formatMacroLine,
+  mealNamesLine,
+  mealSlotLine,
   mealSummaryLine,
   newDraftKey,
   patchItem,
@@ -242,5 +244,58 @@ describe("the day list's one-line summary", () => {
   it("formats a logged meal's macros with the same line as the review card", () => {
     expect(formatMacroLine({ kcal: 520, proteinG: 38, carbsG: 44, fatG: 18 }))
       .toBe("520 kcal · 38p 44c 18f");
+  });
+});
+
+describe("a row that holds more than one sitting", () => {
+  const item = (name: string) => ({
+    name, qty: null, unit: null, kcal: 100, proteinG: 8, carbsG: 10, fatG: 3,
+  });
+
+  const meal = (over: Partial<MealDto>): MealDto => ({
+    id: "m1", slot: "dinner", note: "", source: "text", confidence: null,
+    kcal: 2840, proteinG: 165, carbsG: 290, fatG: 95, items: [], ...over,
+  });
+
+  /** What the owner actually saw: a day described in one sentence, saved once. */
+  const wholeDay = meal({
+    note: "eggs and toast, chicken and rice, a shake, salmon and potato, yoghurt",
+    items: [
+      "Scrambled eggs", "Sourdough toast", "Black coffee", "Chicken thigh",
+      "White rice", "Whey shake", "Salmon fillet", "Sweet potato",
+      "Mixed salad", "Greek yoghurt", "Olive oil",
+    ].map(item),
+  });
+
+  it("counts the items on the slot label", () => {
+    // Without this a day filed as dinner and an actual dinner are the same row.
+    expect(mealSlotLine(wholeDay)).toBe("dinner · 11 items");
+  });
+
+  it("says nothing about a count of one", () => {
+    expect(mealSlotLine(meal({ items: [item("Pizza")] }))).toBe("dinner");
+  });
+
+  it("counts the overflow instead of letting the row clip it", () => {
+    expect(mealNamesLine(wholeDay))
+      .toBe("Scrambled eggs, Sourdough toast, Black coffee, Chicken thigh +7 more");
+  });
+
+  it("adds no tail when everything fits", () => {
+    const three = meal({ items: ["Rice", "Chicken", "Broccoli"].map(item) });
+    expect(mealNamesLine(three)).toBe("Rice, Chicken, Broccoli");
+    expect(mealNamesLine(meal({ items: ["A", "B", "C", "D"].map(item) }))).toBe("A, B, C, D");
+  });
+
+  it("falls back the same way the unbounded line does", () => {
+    expect(mealNamesLine(meal({ note: "two slices of pizza" }))).toBe("two slices of pizza");
+    expect(mealNamesLine(meal({}))).toBe("Meal");
+    expect(mealNamesLine(meal({ items: [item("  ")], note: "late snack" }))).toBe("late snack");
+  });
+
+  it("leaves the unbounded line alone for the action sheet's title", () => {
+    // The sheet truncates to a character budget of its own and wants every
+    // name; only the list row has a two-line budget to run out of.
+    expect(mealSummaryLine(wholeDay)).toContain("Olive oil");
   });
 });

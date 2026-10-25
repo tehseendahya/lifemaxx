@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text } from "react-native";
 import { Card, Label, color, space, tnum } from "@/components/ui";
 import type { MealDto } from "@/lib/types";
 
-import { formatMacroLine, mealSummaryLine, mealTotals } from "./model";
+import { formatMacroLine, mealNamesLine, mealSlotLine, mealSummaryLine, mealTotals } from "./model";
 
 const styles = StyleSheet.create({
   pressed: { opacity: 0.7 },
@@ -21,6 +21,12 @@ const styles = StyleSheet.create({
  * because it is the gesture a phone user's thumb reaches for. Neither one
  * deletes anything directly: destructive actions go through a `Sheet`, never
  * through a press that could have been a mis-scroll.
+ *
+ * The label carries the item count and the summary counts its own overflow
+ * rather than being clipped. A meal is whatever was saved in one request — one
+ * save, one row, no grouping anywhere — so a sentence describing a whole day
+ * legitimately produces one row with a day in it, and the row has to be able to
+ * say so. See `mealNamesLine`.
  */
 export function MealRow({ meal, onOpenActions }: {
   meal: MealDto;
@@ -32,12 +38,14 @@ export function MealRow({ meal, onOpenActions }: {
       onLongPress={() => onOpenActions(meal)}
       style={({ pressed }) => (pressed ? styles.pressed : null)}
       accessibilityRole="button"
-      accessibilityLabel={`${meal.slot}: ${mealSummaryLine(meal)}. ${formatMacroLine(mealTotals(meal))}`}
+      // The full list, not the bounded one: a screen reader has no two-line
+      // budget to run out of, and "+7 more" is useless read aloud.
+      accessibilityLabel={`${mealSlotLine(meal)}: ${mealSummaryLine(meal)}. ${formatMacroLine(mealTotals(meal))}`}
       accessibilityHint="Repeat on today, or delete"
     >
       <Card>
-        <Label>{meal.slot}</Label>
-        <Text style={styles.summary} numberOfLines={2}>{mealSummaryLine(meal)}</Text>
+        <Label>{mealSlotLine(meal)}</Label>
+        <Text style={styles.summary} numberOfLines={2}>{mealNamesLine(meal)}</Text>
         <Text style={styles.macros}>{formatMacroLine(mealTotals(meal))}</Text>
       </Card>
     </Pressable>

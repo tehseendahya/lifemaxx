@@ -1,9 +1,10 @@
 import { useCallback, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useFocusEffect } from "expo-router";
 
 import { queryKeys } from "@/lib/query";
-import type { FoodDay } from "@/lib/types";
+import type { TdeeResult } from "@/lib/shared/tdee";
+import type { Bootstrap, FoodDay } from "@/lib/types";
 
 import { fetchFoodDay } from "./requests";
 import { shiftIsoDate } from "./model";
@@ -28,6 +29,13 @@ export interface FoodDayView {
   refreshing: boolean;
   onRefresh: () => void;
   retry: () => void;
+
+  /**
+   * How far through the 21-day calibration the user is, read out of the
+   * `bootstrap` cache — `null` when nothing has fetched it yet. The fuel card
+   * treats it as a nice-to-have; see the note on the query below.
+   */
+  tdee: TdeeResult | null;
 
   /** `null` until the first successful load tells us what the server calls today. */
   today: string | null;
@@ -69,6 +77,28 @@ export function useFoodDay(): FoodDayView {
    * query is the render that fills it in.
    */
   const today = client.getQueryData<FoodDay>(queryKeys.food(""))?.date ?? null;
+
+  /*
+   * The weigh-in count behind the calibration note, read from `bootstrap`
+   * WITHOUT ever requesting it.
+   *
+   * `skipToken` in place of a query function is react-query's own way to say
+   * "subscribe to this cache entry, never fetch it". That is exactly the
+   * contract wanted here: `bootstrap` is a deliberately fat call — the whole
+   * dashboard, 56 days of history and the full exercise catalogue — and a
+   * count of weigh-ins on the Food screen does not justify any of it. Today is
+   * the tab the app lands on, so in practice the entry is already warm; when it
+   * is not, `buildFuelView` degrades to a card that still explains calibration
+   * and omits the count.
+   *
+   * Subscribing rather than calling `getQueryData` is what makes that recovery
+   * work: `getQueryData` is not reactive, so a payload that landed a moment
+   * after this screen rendered would never appear until something else forced
+   * a render. `invalidateDay` below already invalidates this key after a meal
+   * is written, which is the other half of treating it as shared state.
+   */
+  const bootstrap = useQuery({ queryKey: queryKeys.bootstrap, queryFn: skipToken });
+  const tdee = (bootstrap.data as Bootstrap | undefined)?.tdee ?? null;
 
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = useCallback(() => {
@@ -117,6 +147,7 @@ export function useFoodDay(): FoodDayView {
     onRefresh,
     retry: () => { void refetch(); },
 
+    tdee,
     today,
     selected,
     shown,

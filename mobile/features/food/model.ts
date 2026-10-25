@@ -203,6 +203,51 @@ export function mealSummaryLine(meal: MealDto): string {
 }
 
 /**
+ * How many item names a row shows before it starts counting instead.
+ *
+ * Four fits two lines at 14pt on the narrowest phone with room for the tail.
+ */
+export const MEAL_NAMES_SHOWN = 4;
+
+/**
+ * The same line, but bounded — "Eggs, Toast, Coffee, Rice +7 more".
+ *
+ * One save is one row, always: `POST /api/meals` inserts a single `meals` row
+ * per request and nothing anywhere groups or splits them. So a user who
+ * describes a whole day in one sentence gets one row holding a whole day, and
+ * the owner hit exactly that: a single DINNER row with the day's food in it.
+ *
+ * That part is the data and not this list's doing. What WAS this list's doing
+ * is that `mealSummaryLine` joined every name and the row clipped the result at
+ * two lines, so an eleven-item meal looked like a three-item meal that had been
+ * cut off — no count, no hint that the rest existed, nothing to explain why the
+ * macros underneath were a day's worth. Counting the overflow instead of
+ * clipping it is what makes the row legible without touching the wire format.
+ *
+ * `mealSummaryLine` is deliberately left alone: the action sheet's title wants
+ * the unbounded line (it truncates to a character budget of its own), and its
+ * behaviour is pinned by existing tests.
+ */
+export function mealNamesLine(meal: MealDto, max: number = MEAL_NAMES_SHOWN): string {
+  const names = meal.items.map((i) => i.name.trim()).filter((n) => n !== "");
+  if (names.length === 0) return mealSummaryLine(meal);
+  if (names.length <= max) return names.join(", ");
+  return `${names.slice(0, max).join(", ")} +${names.length - max} more`;
+}
+
+/**
+ * The slot line: "DINNER" on its own, or "DINNER · 11 ITEMS".
+ *
+ * The count is what distinguishes one dinner from a day filed as dinner, and
+ * it is the one fact the row was missing. Suppressed at a single item, where
+ * the name below it already is the count and "1 ITEM" is just noise.
+ */
+export function mealSlotLine(meal: MealDto): string {
+  const n = meal.items.length;
+  return n > 1 ? `${meal.slot} · ${n} items` : meal.slot;
+}
+
+/**
  * Which `resize` action gets the longest edge down to `maxEdge`.
  *
  * A phone photo is portrait about as often as it is landscape, and
