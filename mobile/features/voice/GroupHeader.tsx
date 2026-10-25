@@ -184,15 +184,35 @@ export function GroupHeader({
       )}
 
       {/*
-        The near-miss question, and the reason it exists: "bnch pres" must not
-        silently create a second bench press. One tap either way — answering it
-        re-files these sets and teaches the wording, ignoring it keeps the new
-        exercise. It is only ever drawn on a `new` group, where the alternative
-        to asking is a duplicate nobody can merge afterwards.
+        THE ONE-TAP CORRECTION, and it asks two different questions.
+        
+        Both resolve the same way — re-file these sets onto the named exercise,
+        learn the wording, and hand back the row the parse created — but what is
+        being asked is not the same thing, and the wording has to say which.
+
+        On a `new` group the near miss is a DIFFERENT lift: the server created
+        "Bnch Pres" and something called Barbell Bench Press already exists. The
+        question is genuinely "did you mean that instead?", and it is the reason
+        any of this exists — "bnch pres" must not silently mint a second bench
+        press, because nothing afterwards can merge the two halves of the
+        history.
+
+        On a `fuzzy` group the near miss IS the row the matcher chose, so
+        "Did you mean Barbell Bench Press?" would be offering back the answer it
+        had just given — a tautology with a no-op button under it. What is
+        actually uncertain there is the MATCH, so that is what it asks about, and
+        answering promotes a guess to a confirmed alias: the `~` goes away and
+        the same wording resolves exactly next time instead of being re-guessed.
+
+        Ignoring either one is free. Confirm is not blocked by a question.
       */}
       {group.nearMiss !== null && (
         <View style={styles.askRow}>
-          <Text style={styles.askText}>{`Did you mean ${group.nearMiss.name}?`}</Text>
+          <Text style={styles.askText}>
+            {match === "fuzzy"
+              ? "Matched on spelling. Right?"
+              : `Did you mean ${group.nearMiss.name}?`}
+          </Text>
           <Button
             variant="secondary"
             style={styles.askButton}
@@ -201,7 +221,7 @@ export function GroupHeader({
               if (group.nearMiss !== null) onUseNearMiss(group.entryKey, group.nearMiss);
             }}
           >
-            USE IT
+            {match === "fuzzy" ? "YES" : "USE IT"}
           </Button>
         </View>
       )}
