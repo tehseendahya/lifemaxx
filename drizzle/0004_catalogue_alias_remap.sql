@@ -37,7 +37,7 @@ WHERE a.exercise_id = e.id
   AND a.alias = 'hammer curl';--> statement-breakpoint
 
 -- ---------------------------------------------------------------------------
--- 2. The seed was never idempotent for built-in aliases, and at 820 of them
+-- 2. The seed was never idempotent for built-in aliases, and at 824 of them
 --    that stopped being survivable.
 --
 -- `exercise_aliases_alias_user_idx` is unique on (alias, user_id), and a
@@ -46,7 +46,7 @@ WHERE a.exercise_id = e.id
 -- — both are allowed. The exercises table never noticed, because the seed looks
 -- a row up by slug before writing it; aliases go in blind with ON CONFLICT DO
 -- NOTHING, and nothing ever conflicted. Every `npm run db:seed` therefore wrote
--- the entire global alias set again: 143 extra rows a run at 35 exercises, 820
+-- the entire global alias set again: 143 extra rows a run at 35 exercises, 824
 -- a run now.
 --
 -- Resolution still returned the right answer — tier 1 is an exact match with

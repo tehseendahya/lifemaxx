@@ -139,6 +139,17 @@ export async function resolveExerciseOutcome(
   if (!alias) return { kind: "blank" };
 
   // 1. Exact alias match — covers the overwhelming majority of entries.
+  //
+  // ORDER BY is load-bearing, not tidiness. This matches both the global row
+  // (user_id NULL) and the user's own row for the same spelling, and LIMIT 1
+  // without an order makes the winner a property of the query plan. Measured:
+  // with the alias index in play the user's row came back 20/20; with
+  // enable_indexscan off — a legitimate plan Postgres will pick as statistics
+  // change — the global row came back 10/10. That is a user who re-points
+  // "bench" at their own lift, sees it stick, and finds it silently reverted
+  // later. `learnAlias` only means something if the row it writes wins.
+  //
+  // `user_id IS NULL` sorts false before true, so the user's own row is first.
   const exact = await db
     .select(row)
     .from(exerciseAliases)
@@ -147,6 +158,7 @@ export async function resolveExerciseOutcome(
       eq(exerciseAliases.alias, alias),
       or(isNull(exerciseAliases.userId), eq(exerciseAliases.userId, userId)),
     ))
+    .orderBy(sql`${exerciseAliases.userId} is null`)
     .limit(1);
 
   if (exact.length > 0) {
@@ -165,7 +177,10 @@ export async function resolveExerciseOutcome(
       sql`similarity(${exerciseAliases.alias}, ${alias}) >= ${NEAR_MISS_SCORE}`,
       or(isNull(exerciseAliases.userId), eq(exerciseAliases.userId, userId)),
     ))
-    .orderBy(sql`similarity(${exerciseAliases.alias}, ${alias}) DESC`)
+    // Same reason as tier 1, one step weaker: similarity alone is not a total
+    // order, so two aliases that tie — the user's own spelling and a global
+    // one — would again be separated by the plan. The user's row breaks the tie.
+    .orderBy(sql`similarity(${exerciseAliases.alias}, ${alias}) DESC`, sql`${exerciseAliases.userId} is null`)
     .limit(1);
 
   // 3. Nothing within reach. The caller creates it.
