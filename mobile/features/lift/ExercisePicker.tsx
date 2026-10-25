@@ -63,7 +63,7 @@ type Row =
 type CreateResponse =
   | { created: true; exercise: CatalogueExercise; musclesInferred: boolean }
   | { created: false; reason: "exists"; exercise: CatalogueExercise }
-  | { created: false; reason: "near_miss"; suggestion: CatalogueExercise; score: number };
+  | { created: false; reason: "near_miss"; suggestion: CatalogueExercise; score: number | null };
 
 /** Below this, a search is still being typed and is not worth offering to add. */
 const MIN_CREATE_LENGTH = 3;
@@ -204,14 +204,18 @@ export function ExercisePicker({
         return;
       }
 
-      // `exists` lands here too: the name resolved after all, so the right
-      // answer is to pick that row rather than to report anything.
+      // A created exercise nothing could map to a muscle gets one line of
+      // explanation before it is picked, because the consequence is silent.
       if (res.created && !res.musclesInferred) {
         setUnmapped(res.exercise);
         void queryClient.invalidateQueries({ queryKey: queryKeys.bootstrap });
         tapSelect();
         return;
       }
+
+      // Everything else is just a pick. `reason: "exists"` arrives here too —
+      // the typed name turned out to resolve exactly after all, so the right
+      // answer is that row, with nothing to report.
       finish(res.exercise);
     } catch (err) {
       tapError();

@@ -44,6 +44,28 @@ import {
  * through the outbox as usual.
  */
 
+/**
+ * Does anything survive once the set notation is taken out?
+ *
+ * Deliberately narrow: it strips weight-and-rep shapes, not letters in
+ * general, so lifts whose real names carry numbers or an x keep working —
+ * "21s", "5x5 bench", "Hex Bar Deadlift", "T-Bar Row" all still pass. Only
+ * text that is *nothing but* numbers, units and separators is refused.
+ */
+function hasNameBeyondSetNotation(text: string): boolean {
+  const stripped = text
+    // "100lb" -> "100", so the pair below sees it as a number.
+    .replace(/(\d+(?:\.\d+)?)\s*(?:lbs?|kgs?)\b/gi, "$1")
+    // The weight x reps pair, which is what a mis-parsed set looks like.
+    .replace(/\d+(?:\.\d+)?\s*[x×]\s*\d+(?:\.\d+)?/gi, " ")
+    // Any number left over, including a bare rep count.
+    .replace(/\d+(?:\.\d+)?/g, " ")
+    // A separator left standing alone once its numbers are gone. Bounded by
+    // whitespace or the ends, so the x inside "Hex" is untouched.
+    .replace(/(^|\s)[x×](?=\s|$)/gi, " ");
+  return /\p{L}/u.test(stripped);
+}
+
 interface Body {
   /** Exactly what the user typed. Learned as an alias, whatever it looks like. */
   name?: string;
@@ -77,7 +99,18 @@ export const POST = route<Body>(async ({ userId, body }) => {
   // A name of digits and punctuation is a mis-parse of a set, not a lift. It
   // would slugify to nothing and produce a row called "123" that the user can
   // never find again.
-  if (!/\p{L}/u.test(typed)) throw new HttpError("name must contain a letter.");
+  //
+  // Requiring "any letter" does not do that job, because `x` is a letter. Every
+  // realistic mis-parse passes it: "225x5", "3x10", "5x5", "225 x 5" and
+  // "100lb x 8" would all have been created, as rows named "225x5" and
+  // "100lb X 8". That is not a corner — `225x5` is the documented shape that
+  // reaches the unresolved path, since the parser needs a name before the first
+  // number, so it is precisely the text that arrives here.
+  //
+  // So the set notation is removed first, and a letter has to survive it.
+  if (!hasNameBeyondSetNotation(typed)) {
+    throw new HttpError("name must say which lift it is, not just the numbers.");
+  }
 
   const outcome = await resolveExerciseOutcome(typed, userId);
 
