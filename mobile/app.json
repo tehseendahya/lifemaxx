@@ -40,6 +40,10 @@
         "projectId": "74dacced-64fc-4a90-84c8-05e5650302e4"
       }
     },
-    "owner": "tehseendahya"
+    "owner": "tehseendahya",
+    "updates": {
+      "url": "https://u.expo.dev/74dacced-64fc-4a90-84c8-05e5650302e4"
+    },
+    "android": {}
   }
 }
