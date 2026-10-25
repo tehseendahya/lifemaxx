@@ -17,3 +17,8 @@ coverage/
 mobile/node_modules/
 mobile/.expo/
 mobile/dist/
+
+# Dot-prefixed scratch under scripts/ — throwaway probes written while working
+# something out (often one-off database queries). Never part of the project, and
+# the kind of file it would be careless to commit by accident.
+scripts/.*.ts
