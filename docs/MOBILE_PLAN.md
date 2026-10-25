@@ -11,6 +11,7 @@ The distribution story is **Expo Go**: `npx expo start`, scan the QR with the Ex
 
 ## Contents
 
+0. [First-use fix round](#first-use-fix-round-2026-10-25) — **read this first: it supersedes parts of what follows**
 1. [Architecture decisions](#architecture-decisions)
 2. [Dependency allowlist](#dependency-allowlist)
 3. [Information architecture](#information-architecture)
@@ -20,6 +21,130 @@ The distribution story is **Expo Go**: `npx expo start`, scan the QR with the Ex
 7. [Workstream briefs](#workstream-briefs)
 8. [Risks](#risks)
 
+
+---
+
+## First-use fix round (2026-10-25)
+
+The client above was built and then used on a real phone for the first time.
+This section records what that found and what changed, because several
+decisions below are now **superseded** and following them would undo the fix.
+
+### What the owner typed
+
+```
+today did bench 165x5, 165,5, 175x3, 155x7
+incline smith press 3 sets 155x7
+pec deck 2 sets 20kg for 8
+
+preacher curls 3 sets 30kgx8
+cable rope hammer curls 3 sets 20kgx8
+```
+
+Five lines, one blank separator. It produced nothing usable: `parseShorthand`
+was all-or-nothing, so one unsupported form on line 2 sent the whole paste to
+the model; the typo `165,5` became a set of **165 reps at 165 lb**; two lifts
+matched the wrong machine confidently; two did not exist in the catalogue at
+all and there was **no way to create an exercise anywhere in the app**.
+
+Today the same paste produces 5 entries and 15 sets with **no model call**, all
+five resolving exactly. That run is the acceptance test for this round.
+
+### The six changes, and where each lives
+
+1. **Per-line parsing.** `parseLines()` in `src/lib/llm/shorthand.ts` parses
+   each line independently; `parse-sets.ts` is hybrid, so deterministic lines
+   stay free and only leftovers reach the model. `parseShorthand` keeps its
+   all-or-nothing contract for the web app's offline path, which has no model
+   to fall back on and must refuse rather than silently drop a line.
+2. **New shorthand forms and sanity bounds.** `N sets WxR`, `N sets WkgxR`,
+   `N sets Wkg for R`, `for R`. `SANITY` caps reps at 100, weight at 2000 lb
+   and set counts at 30. Structure recognised but numbers implausible → the
+   chunk is DROPPED and reported on `ParsedEntry.dropped`; structure
+   unrecognised → the line goes to the model. That distinction is what turns
+   `165x5, 165,5` into two sets of 5 at 165 instead of a 165-rep set.
+3. **A 147-exercise catalogue** with 824 aliases, machines included. Also two
+   database bugs: `hammer curl` pointed at Dumbbell Curl, and the seed was
+   never idempotent for built-in aliases (two runs took the table from 141 rows
+   to 1772) — fixed by `drizzle/0004_catalogue_alias_remap.sql` and a partial
+   unique index `exercise_aliases_global_alias_idx`.
+4. **Unknown exercises are created automatically.** See the next section — this
+   is the part that supersedes the most.
+5. **The confirmation sheet is grouped by exercise**, with real RPE, per-set
+   notes, failure/warmup as a choice, and equipment as a column. See
+   "Superseded" below.
+6. **Today is a dashboard**, Food's calibration mode is legible, and `Sheet`
+   no longer overflows past the status bar.
+
+### Exercise resolution now has three outcomes, and step 3 WRITES
+
+`resolveExerciseOutcome()` in `src/lib/exercises.ts` answers `match` /
+`near_miss` / `new` / `blank` against two thresholds: `FUZZY_MATCH_SCORE`
+(0.45, unchanged) and `NEAR_MISS_SCORE` (0.40).
+
+`parseSetsText` acts on it:
+
+| outcome | what happens | what the phone draws |
+|---|---|---|
+| `match`, exact | filed against it | the plain name |
+| `match`, fuzzy | filed against it, and asked about | `~ Name`, `heard: "…"`, `Matched on spelling. Right?` |
+| `near_miss` | **created AND asked about** | `+ Name`, NEW chip, `Did you mean X?` |
+| `new` | **created**, silently | `+ Name`, NEW chip |
+| `blank` | nothing | unmatched chip |
+
+Both halves of the near-miss case matter: creating means a genuinely new lift
+costs **zero taps**, and asking means `bnch pres` cannot silently mint a second
+bench press and split a year of history. A query that is only set notation
+(`225x5`) is refused by the shared `hasNameBeyondSetNotation()` guard, so the
+automatic path cannot write a row called "225x5".
+
+**The parse path is no longer read-only.** It creates before the user confirms,
+because the sheet needs an id to name a lift and log a set against one.
+`DELETE /api/mobile/exercise?id=` takes the row back, and the phone calls it
+fire-and-forget when a group is deleted, when a near miss is answered "yes, I
+meant that one", and when the sheet is discarded. The route refuses a catalogue
+row and refuses any row with sets against it (`sets.exercise_id` is `ON DELETE
+RESTRICT`, so the database is the real guarantee).
+
+Resolution is also **sequential per entry**, not `Promise.all`. Two lines of
+one paste naming the same unknown lift would otherwise both create a row; run
+in order, the first creates it and learns the wording, so the second resolves
+exactly and they share it.
+
+### Superseded — do not implement these as written below
+
+* **"One editable row per set"** and the per-row exercise chip (in *Speaking a
+  set → The confirmation sheet*). The sheet is now **one group per parsed
+  entry** with 56pt hairline-separated set LINES inside it. Fifteen identical
+  cards was the complaint. State is still one row per set; `groupRows()` is a
+  pure projection over it, which is why the outbox contract did not move.
+* **"The confirm button is disabled until every row has a real
+  `exerciseId`"**. Still true for an unmatched row, but unmatched is now rare —
+  an unknown name is created instead. A `new` exercise does **not** block
+  confirm, and neither does an unanswered near-miss question.
+* **RPE / to-failure / warmup "as small chips"**. RPE is a segmented control
+  (`@8`), kind is a two-glyph badge expanding to a segmented control, and both
+  are per-set with bulk actions behind `⋯`.
+* **`confidence: "exact" | "fuzzy"`**. It is `"exact" | "fuzzy" | "new"`, and
+  `ParsedEntry` additionally carries optional `nearMiss` and `dropped`. All
+  three are declared in `mobile/lib/types.ts`; both optional ones are optional
+  so the sheet still renders against a server that sends neither.
+* **Weights to one decimal.** Display is **always whole pounds**, rounded at
+  the parse edge so what is shown is what is stored. 20 kg reads `44 lb`, not
+  `44.1 lb`. Storage stays kg; there is no per-exercise unit memory.
+
+### Today is a dashboard, not a restatement
+
+`verdict.ts` (one sentence, six-rung precedence ladder), `goals.ts` (four
+deterministic patterns over `goalsText`, no model call), `model.ts` (trajectory,
+goal gaps, strength deltas, load buckets, streaks). `GET /api/mobile/bootstrap`
+gained exactly one field, `history`, carrying 56 days of bodyweight, intake and
+hard-set counts plus e1RM series for the three main lifts. Days with nothing
+logged are ABSENT — a gap is a gap and the client must not interpolate.
+
+Charts are `Chart` / `Sparkline` / `BarSeries` in `mobile/components/ui/`, on
+`react-native-svg`, which was already a dependency. No new dependency was added
+anywhere in this round.
 
 ---
 
@@ -467,6 +592,13 @@ Button becomes a pulsing outline labelled `TRANSCRIBING…`; a skeleton row appe
 
 ### The confirmation sheet — nothing is written before this
 
+> **SUPERSEDED IN PART.** Points 2 and 3 below describe a per-SET layout and a
+> two-value `confidence`; the sheet was rebuilt around per-ENTRY groups after
+> first use, and an unknown exercise is now created rather than reported. See
+> [First-use fix round](#first-use-fix-round-2026-10-25). Point 1 (the verbatim
+> transcript and RE-PARSE) and point 4 (the outbox, one item per set, with
+> `rawText`) are unchanged and still correct.
+
 A bottom sheet, not a full screen, so the session stays visible behind it.
 
 1. **Transcript, verbatim**, in `muted` 13pt. Tappable → becomes a `TextInput` with a `RE-PARSE` button, which re-runs parsing on the edited text via `POST /api/sets/parse { text }` (same response shape, no new audio). This is the escape hatch for a badly misheard sentence.
@@ -509,7 +641,10 @@ Server:
      unresolved: string[];
    }>
    ```
-   with the same three steps in the same order: `parseShorthand(text)` → on empty, `getLlm().structured({ model: MODELS.setsParse, SETS_SYSTEM, JSON_SCHEMAS.parsed_sets, parsedSetsSchema })` → `withUser(userId, …)` + `resolveExercise()` per entry. Then rewrite `/api/sets/parse` to call it, so there is exactly one implementation and the web client's behaviour is byte-identical.
+   with the same three steps in the same order: `parseShorthand(text)` → on empty, `getLlm().structured({ model: MODELS.setsParse, SETS_SYSTEM, JSON_SCHEMAS.parsed_sets, parsedSetsSchema })` → `withUser(userId, …)` + `resolveExercise()` per entry.
+   *(Superseded: step 1 is now `parseLines` per line and step 3 is
+   `resolveExerciseOutcome` plus creation. The signature gained an optional
+   `nearMiss` and `dropped` per entry; nothing was removed.)* Then rewrite `/api/sets/parse` to call it, so there is exactly one implementation and the web client's behaviour is byte-identical.
 4. Scoping: `route(..., { scope: "manual" })`. Both the transcription and the parse are model calls and must not run inside `withUser()`'s transaction — read/resolve in a scope *after* them, as `/api/sets/parse` already does.
 5. The audio is never written to disk and never persisted. It lives in memory for one request, same rule as meal photos.
 

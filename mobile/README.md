@@ -137,18 +137,64 @@ it by appending `/shared-smoke` to the URL in Expo Go's developer menu, or from
   carries a client-minted `clientId` and the server upserts on
   `(workout_id, client_id)`, so a retry after a lost response is not a
   duplicate.
-- **Typed set entry** — `TYPE IT`, then "did 3 sets weighted pull ups 45lbs for
-  6 reps". It posts to the existing `/api/sets/parse` (deterministic shorthand
-  parser first, model second, then fuzzy exercise matching) and shows one
-  editable row per set before anything is written. A fuzzy match is flagged;
-  correcting it teaches an alias, so it is free next time.
+- **Typed set entry, including a multi-line paste.** `TYPE IT`, then as many
+  lines as you like — this is the primary way to log after the fact:
+
+  ```
+  today did bench 165x5, 165,5, 175x3, 155x7
+  incline smith press 3 sets 155x7
+  pec deck 2 sets 20kg for 8
+
+  preacher curls 3 sets 30kgx8
+  cable rope hammer curls 3 sets 20kgx8
+  ```
+
+  That paste is the regression test for the whole path: 5 entries, 15 sets, all
+  five lifts resolved exactly, **no model call**. Each line is parsed
+  independently, so one line the parser cannot read costs one line rather than
+  the whole paste. Leading filler ("today did") is stripped; `N sets WxR`,
+  `WkgxR` and `for R` all parse; `165,5` is recognised as a typo and the
+  impossible number is dropped rather than logged as a 165-rep set (the sheet
+  says `IGNORED: "165"` so the loss is visible).
+
+  Weights always display in **whole pounds** — `20kg` reads `44 lb`, not
+  `44.1 lb` — and what is shown is what is stored. Storage stays kg.
+- **Exercises that do not exist yet are created for you.** An unknown name
+  costs zero taps: it is created, marked `+ Name` with a NEW chip, and the sets
+  log against it. If the name is close to something you already have, it is
+  still created but the sheet asks `Did you mean Barbell Curl?` with a one-tap
+  answer — so a genuinely new lift is free while `bnch pres` cannot quietly
+  become a second bench press. Answering, deleting the group or discarding the
+  sheet hands the created row back (`DELETE /api/mobile/exercise`), which is
+  refused for anything with sets against it. You can also add one from the
+  exercise picker.
+- **The confirmation sheet is grouped by exercise**, not one card per set: a
+  header with the canonical name, its EQUIPMENT as a column (so "incline smith"
+  and "incline barbell" differ at a glance rather than by one word mid-name),
+  then hairline-separated set lines. Per-set RPE, per-set notes, and
+  warmup/failure as a real choice, with bulk actions behind `⋯`. A fuzzy match
+  is always marked `~` with the raw wording under it; confirming one teaches an
+  alias, so it is free next time.
 - **Spoken set entry** — the same flow with a microphone. Records with
   `expo-audio`, uploads to `/api/voice/transcribe`, and feeds the transcript
   into the same parse path and the same confirmation sheet. Needs
   `OPENAI_TRANSCRIBE_MODEL` set on the server (below).
-- **Today, Runs, Food, You, Coach, and a per-exercise history screen** — ports
-  of the web pages, reading one cached `GET /api/mobile/bootstrap` payload with
-  every figure computed by the shared domain layer.
+- **Today is a dashboard**, not a restatement of the other tabs: one verdict
+  sentence ("Rear Delts is 10 sets short this week and you last hit it 9 days
+  ago"), a 28-day bodyweight trajectory with the fitted trend and intake
+  against measured maintenance, your goals with the gap to each, strength
+  deltas, an 8-week load chart, and streaks. It reads one cached
+  `GET /api/mobile/bootstrap`, which now also carries 56 days of `history`.
+  Days with nothing logged are absent from that series and are drawn as gaps —
+  nothing interpolates across them.
+- **Runs, Food, You, Coach, and a per-exercise history screen** — ports of the
+  web pages, every figure computed by the shared domain layer.
+- **Food reads correctly before you have targets.** Until day 21 only protein
+  has one, because maintenance is measured from your own weigh-ins rather than
+  guessed. Carbs and fat now show the figure with "no target yet" and no track
+  behind it, instead of a 0%-wide bar in a grey trough that read as "you have
+  eaten no carbs". The card also says which of the three things it is still
+  waiting for — weigh-ins, logged days, or your choice of cut/maintain/bulk.
 - **Meal capture** — camera, library or a typed sentence; macros estimated,
   then reviewed and edited before saving. The photo exists only in memory and
   the two temporary files the picker and the resizer write are deleted
@@ -345,13 +391,27 @@ There is no simulator, no device and no Xcode in the environment this was built
 in. These gates pass:
 
 - `npm run typecheck` in both projects — clean
-- `npm test` — 320 here, 272 at the repo root
-- `npx expo export --platform ios` — 1920 modules, a 5.2MB Hermes bundle, no
+- `npm test` — 493 here, 371 at the repo root
+- the repo root's 17 database tests and `npm run db:verify`, both against a
+  real PostgreSQL 16. These are the only things that exercise the row-level
+  security policies; they **skip silently** without a `DATABASE_URL`, so
+  `npm test` alone never proved RLS worked.
+- `npx expo export --platform ios` — 2043 modules, a 5.2MB Hermes bundle, no
   errors. This proves Metro resolves every route, the cross-boundary shared
   imports and every native-module import.
+- `npm run build` at the repo root, from a clean `git worktree` of HEAD rather
+  than the working tree — which is what CI actually builds, and the only check
+  that catches a file the working tree has but the commit does not.
 - `npx expo export --platform web` — also clean, and used with Playwright for a
   rough visual check of the design system, the live-session screen, the number
   pad, the sheets and the exercise detail screen.
+
+**That visual check predates the current screens.** The Today dashboard, the
+grouped confirmation sheet and the food fuel card have had **no** visual
+verification of any kind — not a screenshot, not a harness render. They are
+covered by unit tests on their view-models and by a clean bundle, and that is
+all. Any screenshot of them taken during development required a temporary
+auth stub which was removed rather than committed, so none survives.
 
 A successful Metro bundle catches version mismatch, unresolvable shared imports
 and bad native-module imports. It **cannot** catch a module that bundles fine
