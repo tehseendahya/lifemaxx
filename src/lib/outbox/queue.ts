@@ -20,7 +20,15 @@
  *     rest of the session.
  */
 
-export type OutboxKind = "set";
+/**
+ * `session-start` exists because `POST /api/sets` resolves the workout
+ * server-side via `getActiveWorkout()` — the set payload carries no workout id.
+ * So the first set of the day in a basement has nowhere to land unless the
+ * start is queued ahead of it. Since this queue already delivers strictly in
+ * order and stops at the first failure, an ordered start-then-sets queue makes
+ * that work with no new server contract at all.
+ */
+export type OutboxKind = "set" | "session-start";
 
 export interface OutboxItem {
   /** Also the row's client_id, so a retry after a lost response is not a duplicate. */

@@ -1,4 +1,5 @@
 import { currentUserId } from "@/lib/supabase/server";
+import { corsHeadersFor, preflight } from "@/lib/auth/cors";
 import { getLlm } from "@/lib/llm";
 import { MODELS } from "@/lib/models";
 import { buildCoachContext } from "@/lib/llm/context";
@@ -8,11 +9,16 @@ import { eq, desc } from "drizzle-orm";
 import { getProfile, localDate } from "@/lib/queries";
 
 export async function POST(req: Request) {
-  const userId = await currentUserId();
-  if (!userId) return new Response("Not signed in", { status: 401 });
+  const cors = corsHeadersFor(req);
+
+  // Cookies for the browser, a verified bearer token for the phone. The native
+  // client reads this stream with `expo/fetch`, since React Native's default
+  // XHR-backed fetch leaves `response.body` undefined.
+  const userId = await currentUserId(req);
+  if (!userId) return new Response("Not signed in", { status: 401, headers: cors });
 
   const { question } = (await req.json()) as { question?: string };
-  if (!question?.trim()) return new Response("Ask something.", { status: 400 });
+  if (!question?.trim()) return new Response("Ask something.", { status: 400, headers: cors });
 
   // Fourteen days of context and the question's own row, in one scoped
   // transaction; the stream below runs outside it. See session/ask for why.
@@ -59,6 +65,8 @@ export async function POST(req: Request) {
   });
 
   return new Response(stream, {
-    headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+    headers: { ...cors, "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
   });
 }
+
+export const OPTIONS = preflight;

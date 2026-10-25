@@ -11,3 +11,9 @@ next-env.d.ts
 .vercel
 coverage/
 .env*
+
+# The native client is a separate npm project nested here, with its own
+# dependency tree on purpose (see mobile/README.md).
+mobile/node_modules/
+mobile/.expo/
+mobile/dist/

@@ -1,0 +1,68 @@
+/**
+ * The design system. Everything a screen needs, in one import:
+ *
+ *     import { Screen, Card, Label, Stat, Button, NumberPad } from "@/components/ui";
+ *
+ * These are a port of `src/components/ui.tsx` and `src/app/globals.css`, not a
+ * redesign. The user did not complain about how the app looks — they complained
+ * about how it feels, how many taps it costs and how hard it is to get to. So
+ * the colours, radii, type scale and the mono micro-label voice are the web
+ * app's, transcribed; what changed is that tap targets grew, dropdowns became
+ * sheets, and numbers are typed on a pad instead of a keyboard.
+ *
+ * ── THE SIX RULES ──────────────────────────────────────────────────────────
+ *
+ * 1. EVERY NUMBER RENDERS WITH TABULAR NUMERALS. Spread `...tnum` into the
+ *    style, or use a component that already does (`Stat`, `Pill`, `MacroBar`,
+ *    `NumberPad`). A column of weights that twitches sideways as it updates is
+ *    the most visible possible regression from the web app.
+ *
+ * 2. MICRO-LABELS ARE `<Label>`, never an ad-hoc styled `Text`. There are a
+ *    dozen on a screen and they must all be the same 10pt Menlo at the same
+ *    tracking.
+ *
+ * 3. NO COLOUR LITERALS OUTSIDE `tokens.ts`. If a colour you need is not in
+ *    `color`, it is not in `globals.css` either, and the answer is to use one
+ *    that is — not to pick a hex. (The two `#000000` backdrops in `Sheet` and
+ *    `NumberPad` are the exception: a dimming scrim is not a surface colour.)
+ *
+ * 4. NO `Alert.alert`, NO `confirm`. Use `<Sheet>`. Nothing the user does on
+ *    purpose gets confirmed by a system dialog in a system typeface.
+ *
+ * 5. NO `TextInput` FOR NUMBERS. Use `<NumberPad>`. The system keyboard is
+ *    permitted in exactly two places in this app: the exercise search field
+ *    and the coach's message field.
+ *
+ * 6. MINIMUM TAP TARGET 44pt (`hit.min`). The primary action in a flow is 56
+ *    (`hit.big`) or 72 (`hit.huge`) — `<Button size="lg">` or `size="hero"`.
+ *
+ * ── AND ONE MORE ───────────────────────────────────────────────────────────
+ *
+ * No component in this folder fires a haptic. `Button` and `NumberPad` cannot
+ * know whether a press saved a set, opened a sheet or cancelled something, and
+ * those must not feel alike. Call `tapSelect` / `tapSave` / `tapDone` from
+ * `lib/haptics` in your own handler.
+ *
+ * Nothing here imports from outside `react-native`, `react-native-safe-area-
+ * context` and `./tokens`. Keep it that way: this layer has to be usable from
+ * any screen without dragging the API client, the outbox or the query cache
+ * into the bundle behind it.
+ */
+
+export { Button } from "./Button";
+export { Card } from "./Card";
+export { Empty } from "./Empty";
+export { Label, microLabel } from "./Label";
+export { MacroBar } from "./MacroBar";
+export { NumberPad } from "./NumberPad";
+export { Pill } from "./Pill";
+export { Screen } from "./Screen";
+export { Sheet } from "./Sheet";
+export { Spinner } from "./Spinner";
+export { Stat } from "./Stat";
+export { Toggle } from "./Toggle";
+
+export { BACKSPACE, MAX_LENGTH, applyKey, displayValue, padKeys } from "./keypad";
+export type { PadKey } from "./keypad";
+
+export { SCROLL_BOTTOM_INSET, color, font, hit, radius, space, tnum } from "./tokens";

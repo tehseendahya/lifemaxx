@@ -1,5 +1,6 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { extractBearer, userFromBearer } from "@/lib/auth/bearer";
 
 export async function createClient() {
   const store = await cookies();
@@ -46,12 +47,52 @@ function devUserId(): string | null {
 }
 let warned = false;
 
-/** The signed-in user's id, or null. Every data route gates on this. */
-export async function currentUserId(): Promise<string | null> {
+export interface AuthedUser {
+  id: string;
+  email: string;
+}
+
+/**
+ * Who is making this request — cookies for the web, bearer token for native.
+ *
+ * Pass `req` from an API route; server components call it with nothing, which
+ * is the cookie-and-dev-shim path they have always taken.
+ *
+ * The order is load-bearing:
+ *
+ *  1. An `Authorization` header present at all means the caller has declared
+ *     itself a token client, so the token decides and nothing else gets a vote.
+ *     An invalid one returns null — it must 401. Falling through to cookies
+ *     here would mean a phone with an expired token quietly authenticating as
+ *     whoever happened to be signed in on that origin, and falling through to
+ *     the dev shim would turn a typo into a login.
+ *  2. DEV_USER_ID, unchanged, for a laptop with no reachable Supabase.
+ *  3. Cookies, unchanged, for the web app.
+ *
+ * Nothing here touches row-level security: the id this returns still goes
+ * through `withUser()`, so Postgres does the filtering either way.
+ */
+export async function currentUser(req?: Request): Promise<AuthedUser | null> {
+  const header = req?.headers.get("authorization") ?? null;
+  if (header !== null) {
+    const token = extractBearer(header);
+    if (!token) return null;
+    return userFromBearer(token);
+  }
+
+  // The shim has no email to offer. Every consumer that needs one is reached
+  // by a real session; `ensureProfile` is idempotent and DEV_USER_ID points at
+  // a profile that already exists, so there is nothing for it to write.
   const dev = devUserId();
-  if (dev) return dev;
+  if (dev) return { id: dev, email: "" };
 
   const supabase = await createClient();
   const { data } = await supabase.auth.getUser();
-  return data.user?.id ?? null;
+  if (!data.user) return null;
+  return { id: data.user.id, email: data.user.email ?? "" };
+}
+
+/** The signed-in user's id, or null. Every data route gates on this. */
+export async function currentUserId(req?: Request): Promise<string | null> {
+  return (await currentUser(req))?.id ?? null;
 }
