@@ -2,7 +2,7 @@ import { withUser } from "@/db";
 import { getLlm, JSON_SCHEMAS, parsedSetsSchema } from "@/lib/llm";
 import { MODELS } from "@/lib/models";
 import { SETS_SYSTEM } from "@/lib/llm/prompts";
-import { parseLines, roundSetsToDisplayLb } from "@/lib/llm/shorthand";
+import { parseLines, roundSetsToDisplayLb, setWithinSanity } from "@/lib/llm/shorthand";
 import {
   createUserExercise,
   hasNameBeyondSetNotation,
@@ -132,6 +132,30 @@ export async function parseSetsText(text: string, userId: string): Promise<Parse
       jsonSchema: JSON_SCHEMAS.parsed_sets,
       validator: parsedSetsSchema,
     });
+    /*
+     * The model's answer gets the same sanity bound the deterministic path
+     * applies, and for the same reason: "165,5" on a line of its own does not
+     * parse, so it arrives HERE, and `parsedSetsSchema` only says the reps are
+     * a positive integer. The bound cannot go in that schema — it is handed to
+     * OpenAI as a strict JSON Schema, which has no `maximum` — so it is applied
+     * to the answer instead.
+     *
+     * Out-of-bounds sets are dropped and reported in `dropped`, exactly as the
+     * deterministic path reports them, rather than clamped: a 165-rep set is
+     * not a 100-rep set, it is a mis-typed 5-rep set, and the only honest
+     * options are to drop it or to ask.
+     */
+    const bounded = result.entries.map((entry) => {
+      const kept = entry.sets.filter((s) => setWithinSanity(s.reps, s.weight_lb));
+      const lost = entry.sets.length - kept.length;
+      return {
+        ...entry,
+        sets: kept,
+        ...(lost > 0 ? { dropped: [`${lost} implausible set${lost === 1 ? "" : "s"}`] } : {}),
+      };
+    // An entry whose every set was implausible is not an entry.
+    }).filter((entry) => entry.sets.length > 0);
+
     // Splice the model's entries in at the first line it was asked about, so a
     // mixed paste comes back in the order the owner typed it.
     const firstLeftover = lines.findIndex((l) => l.kind === "unparsed");
@@ -140,7 +164,7 @@ export async function parseSetsText(text: string, userId: string): Promise<Parse
       : lines.slice(0, firstLeftover).filter((l) => l.kind === "entry").length;
     entries = [
       ...deterministic.slice(0, before),
-      ...result.entries,
+      ...bounded,
       ...deterministic.slice(before),
     ];
   }

@@ -67,6 +67,28 @@ export const SANITY = {
 } as const;
 
 /**
+ * Is this a set, or a typo?
+ *
+ * Exported because for a long time it was not, and the bound therefore only
+ * existed on the deterministic path. The model path validated against
+ * `parsedSetsSchema`, which says `int().positive()` and `nonnegative()` and
+ * nothing more, and `POST /api/sets` did not check at all — so "165,5" on a
+ * line of its own went unparsed, straight to the model, and could come back as
+ * a 165-rep set. The reported bug was narrowed, not closed.
+ *
+ * The bound cannot be moved into `parsedSetsSchema`: that schema is handed to
+ * OpenAI as a strict structured-output JSON Schema, which does not support
+ * `minimum`/`maximum`, so adding them there breaks the request rather than the
+ * typo. It has to be applied to the model's answer after it arrives, and again
+ * at the write path, which is the only place every client passes through.
+ */
+export function setWithinSanity(reps: number, weightLb: number): boolean {
+  if (!Number.isInteger(reps) || reps < SANITY.minReps || reps > SANITY.maxReps) return false;
+  if (!Number.isFinite(weightLb) || weightLb < 0 || weightLb > SANITY.maxWeightLb) return false;
+  return true;
+}
+
+/**
  * Leading filler, as a small CLOSED list.
  *
  * "today did bench 165x5" must yield "bench", not "today did bench". This is
@@ -182,8 +204,7 @@ function makeSet(
   rpe: number | null,
   flags: { toFailure: boolean; isWarmup: boolean },
 ): ParsedSet | null {
-  if (!Number.isInteger(reps) || reps < SANITY.minReps || reps > SANITY.maxReps) return null;
-  if (!Number.isFinite(weightLb) || weightLb < 0 || weightLb > SANITY.maxWeightLb) return null;
+  if (!setWithinSanity(reps, weightLb)) return null;
   return {
     reps,
     weight_lb: weightLb,

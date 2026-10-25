@@ -175,6 +175,30 @@ export function QuickLog({
     clear();
   }, [rows, dropCreated, clear]);
 
+  /**
+   * Delete one set row, and drop a created exercise the moment nothing points
+   * at it any more.
+   *
+   * Deleting rows one at a time used to leak: only the bulk group delete
+   * dropped the exercise, so removing a `new` group's last row by its own `×`
+   * left the created row behind with the typed wording learned as its alias.
+   * Rather than special-case "was that the last one", this recomputes what is
+   * still referenced after the delete — which is correct whichever row goes,
+   * and stays correct if the grouping changes.
+   *
+   * The side effect is deliberately outside `setRows`: a state updater can be
+   * invoked twice, and firing DELETEs from inside one would double-send them.
+   */
+  const removeRow = useCallback((key: string) => {
+    const next = deleteRow(rows, key);
+    const stillReferenced = new Set(
+      next.map((r) => r.exerciseId).filter((id): id is string => id !== null),
+    );
+    const orphaned = createdExerciseIds(rows).filter((id) => !stillReferenced.has(id));
+    if (orphaned.length > 0) dropCreated(orphaned);
+    setRows(next);
+  }, [rows, dropCreated]);
+
   const submit = useCallback(async (text: string) => {
     setBusy(true);
     setEntryError(null);
@@ -393,6 +417,22 @@ export function QuickLog({
         queueing={queueing}
         error={sheetError}
         onEditSource={() => {
+          /*
+           * TAP TO FIX throws these rows away and re-parses, so anything the
+           * last parse created is already unreferenced — and it is the most
+           * likely thing in the sheet to be junk, because wanting to fix the
+           * text is usually what a mis-created exercise looks like.
+           *
+           * Dropping it here is not tidiness. `createUserExercise` learned the
+           * typed wording as an alias of that row, so leaving it behind means
+           * the typo resolves EXACTLY to the junk exercise from then on — the
+           * split-history failure the near-miss question exists to prevent,
+           * arriving by the one road the other three cleanup sites miss.
+           *
+           * Deleting the exercise takes its aliases with it (ON DELETE
+           * CASCADE), so the corrected text re-parses from a clean slate.
+           */
+          dropCreated(createdExerciseIds(rows));
           setReturnToSheet(true);
           setEntryError(null);
           setStage("typing");
@@ -401,7 +441,7 @@ export function QuickLog({
         onPatch={(key: string, patch: RowPatch) => setRows((c) => patchRow(c, key, patch))}
         onOpenNote={(key) => setNoting({ kind: "row", key })}
         onDuplicate={(key) => setRows((c) => duplicateRow(c, key))}
-        onDelete={(key) => setRows((c) => deleteRow(c, key))}
+        onDelete={(key) => removeRow(key)}
         onPickExercise={(entryKey, query) => {
           // Closing the bulk sheet first: two `Modal`s presenting at once is
           // the one thing that reliably leaves iOS showing neither.
