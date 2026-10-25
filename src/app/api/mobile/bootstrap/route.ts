@@ -6,8 +6,10 @@ import { and, asc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import {
   getProfile, getActiveTarget, getDayMeals, sumMacros, getMuscleVolume,
   getTdee, defaultProteinTarget, getActiveWorkout, getRuns,
-  getLowerBodyLiftDates, getGyms,
+  getLowerBodyLiftDates, getGyms, getDailyIntake, getBodyweightSeries,
+  getDailyHardSets, getMainLiftE1rmSeries, shiftDate, HISTORY_LOOKBACK_DAYS,
 } from "@/lib/queries";
+import { mergeHistoryDays } from "@/lib/history";
 import { summarize } from "@/lib/domain/readiness";
 import { displayLb } from "@/lib/domain/units";
 import { bestE1rm } from "@/lib/domain/e1rm";
@@ -20,6 +22,15 @@ import { bestE1rm } from "@/lib/domain/e1rm";
  * in, and after that it has to run on what it already holds. Six round trips
  * means six chances to be holding half a dashboard.
  *
+ * `history` is the one field added for the Today dashboard, and it is raw for
+ * the same reason: 56 daily rows plus up to three e1RM series, with every
+ * streak, weekly bucket, rolling mean and lift-day count left to pure functions
+ * on the device. A server-computed streak would be a second implementation of a
+ * rule the client has to be able to render anyway, and the two would disagree
+ * the first time one of them was changed. Run mileage is deliberately NOT in
+ * here — `runs` already carries 56 days of raw runs and the phone already runs
+ * `weeklyRunStats()` on them.
+ *
  * `runs` and `lowerBodyLiftDates` go over the wire raw, which looks wasteful
  * until you notice the alternative: the native app runs the same
  * `summarizeRunningWeek()` on them that the web page runs, so the two clients
@@ -30,6 +41,7 @@ export const GET = route(async ({ userId, tz, today }) => {
   const [
     profile, target, meals, volume, tdee, proteinFloor,
     active, runs, lowerBodyLiftDates, gymList, catalogueRows, lastSets,
+    weighInSeries, intakeSeries, hardSetDays, mainLiftSeries,
   ] = await Promise.all([
     getProfile(userId),
     getActiveTarget(userId, today),
@@ -54,6 +66,20 @@ export const GET = route(async ({ userId, tz, today }) => {
       .where(or(isNull(exercises.userId), eq(exercises.userId, userId)))
       .orderBy(asc(exercises.name)),
     lastSetPerExercise(userId),
+
+    /*
+     * The four reads behind `history`, the Today dashboard's charts.
+     *
+     * They are in this `Promise.all` rather than in a helper of their own so
+     * they go down the one pooled connection in parallel with everything else.
+     * The whole point of this endpoint is that the phone gets one round trip on
+     * the way into a basement; four sequential queries appended to the end of it
+     * would be four more chances to still be waiting when the signal goes.
+     */
+    getBodyweightSeries(userId, today),
+    getDailyIntake(userId, shiftDate(today, -HISTORY_LOOKBACK_DAYS)),
+    getDailyHardSets(userId, today),
+    getMainLiftE1rmSeries(userId, today),
   ]);
 
   const muscleMap = await muscleMapFor(catalogueRows.map((row) => row.id));
@@ -115,6 +141,15 @@ export const GET = route(async ({ userId, tz, today }) => {
       muscles: muscleMap.get(row.id) ?? [],
     })),
     lastSets,
+
+    history: {
+      days: mergeHistoryDays(weighInSeries, intakeSeries, hardSetDays),
+      mainLifts: mainLiftSeries.map((lift) => ({
+        exerciseId: lift.exerciseId,
+        name: lift.name,
+        points: lift.points.map((p) => ({ date: p.date, e1rmLb: displayLb(p.e1rmKg) })),
+      })),
+    },
   };
 });
 

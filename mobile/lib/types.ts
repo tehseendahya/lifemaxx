@@ -98,6 +98,42 @@ export interface RankedMuscle {
   score: number;
 }
 
+/**
+ * One day of the dashboard's 56-day history.
+ *
+ * Days with nothing logged are ABSENT from the array, not present as zeroes.
+ * The Today charts draw a gap as nothing and never interpolate across one, so
+ * "no weigh-in on Tuesday" has to stay distinguishable from "weighed in at
+ * zero". Any client code that fills the gaps has to do it deliberately.
+ */
+export interface HistoryDay {
+  /** `YYYY-MM-DD` in the user's timezone. */
+  date: string;
+  /** Whole lb, already rounded server-side. Null when there was no weigh-in. */
+  weightLb: number | null;
+  /** That day's meals summed. Null when nothing was logged. */
+  kcal: number | null;
+  /** Non-warmup sets logged that day — whole sets, not muscle-weighted fractions. */
+  hardSets: number;
+}
+
+export interface MainLiftSeries {
+  exerciseId: string;
+  name: string;
+  /**
+   * One point per completed session in the window, ascending. Sessions whose
+   * working sets are all above 12 reps are absent: Epley is meaningless there,
+   * so plotting them would read as a PR.
+   */
+  points: { date: string; e1rmLb: number }[];
+}
+
+export interface HistoryDto {
+  days: HistoryDay[];
+  /** Up to 3 lifts, by distinct session count desc then name asc. Deterministic. */
+  mainLifts: MainLiftSeries[];
+}
+
 // --------------------------------------------------- GET /api/mobile/bootstrap
 
 /**
@@ -122,6 +158,13 @@ export interface Bootstrap {
   gyms: GymDto[];
   catalogue: CatalogueExercise[];
   lastSets: Record<string, LastSet>;
+  /**
+   * 56 days of bodyweight, intake and working-set counts, plus up to three
+   * e1RM series. Raw, like `runs`: every streak, weekly bucket and rolling
+   * mean the Today screen draws is a pure function in `features/today/model.ts`
+   * rather than a second server-side implementation of the same rule.
+   */
+  history: HistoryDto;
 }
 
 // ---------------------------------------------------- GET /api/mobile/session

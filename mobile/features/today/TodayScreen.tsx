@@ -2,92 +2,156 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 
 import {
-  Button, Card, Empty, Label, MacroBar, Screen, Spinner, Stat,
-  color, space, tnum,
+  BarSeries, Button, Card, Chart, Empty, Label, Screen, Sparkline, Spinner, Stat,
+  color, hit, microLabel, space, tnum,
 } from "@/components/ui";
 import { tapSelect } from "@/lib/haptics";
 
 import { NavLine } from "./NavLine";
 import { buildTodayModel } from "./model";
+import type { GoalRow, IntakePanel, LoadBlock, StrengthRow, WeightPanel } from "./model";
 import { useBootstrap } from "./useBootstrap";
+import { verdict } from "./verdict";
+
+/** Panel heights. Fixed; only the widths are measured. */
+const WEIGHT_H = 76;
+const INTAKE_H = 56;
+const SPARK_H = 32;
+const SETS_H = 60;
+const MILES_H = 20;
 
 const styles = StyleSheet.create({
+  pressed: { opacity: 0.7 },
   rowBetween: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     gap: space.md,
   },
-  pressed: { opacity: 0.7 },
-
-  body: { color: color.ink, fontSize: 14, lineHeight: 20 },
-  muted: { color: color.muted, fontSize: 14, lineHeight: 20 },
-  warn: { color: color.warn, fontSize: 14, lineHeight: 20 },
   arrow: { color: color.accent, fontSize: 16 },
+  body: { color: color.ink, fontSize: 14, lineHeight: 20 },
+  muted: { color: color.muted, fontSize: 13, lineHeight: 19 },
 
-  /** The card's headline figure — kcal, weekly miles. The web's `text-3xl`. */
-  figureRow: { flexDirection: "row", alignItems: "baseline", gap: space.sm },
-  figure: { ...tnum, color: color.ink, fontSize: 30, fontWeight: "600" },
-  figureTail: { ...tnum, color: color.muted, fontSize: 14, flexShrink: 1 },
+  /*
+   * The verdict is a bare block rather than a `Card`. It is the answer, not a
+   * readout: putting it on the same surface as the five cards below would make
+   * it the first of six equal things instead of the one the other five are
+   * evidence for. The 2pt accent rule is the whole chrome it gets.
+   */
+  verdictPress: { minHeight: hit.min, marginBottom: space.lg },
+  verdictBlock: {
+    borderLeftWidth: 2,
+    borderLeftColor: color.accent,
+    paddingLeft: space.lg,
+  },
+  verdictText: { ...tnum, fontSize: 17, lineHeight: 24 },
 
-  macros: { marginTop: space.md, gap: 10 },
+  statRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: space.lg,
+    marginBottom: space.md,
+  },
+  statCol: { flexShrink: 1 },
 
-  muscleRow: {
+  /** The shared x axis under the trajectory card's two panels. */
+  axis: {
+    height: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: space.xs,
+  },
+  axisLabel: { ...microLabel, ...tnum },
+
+  /*
+   * The raw weigh-ins are drawn in a second SVG stacked on the first, rather
+   * than as dots on the fitted line's own series. They are two different things
+   * — one is a measurement, one is a model — and they do not share x positions:
+   * the fit has two endpoints and the observations have as many as there are
+   * weigh-ins.
+   */
+  overlay: { position: "absolute", left: 0, top: 0 },
+
+  goalRow: { paddingVertical: space.sm },
+  divided: { borderTopWidth: 1, borderTopColor: color.line },
+  goalHead: { flexDirection: "row", alignItems: "baseline", gap: space.sm },
+  goalSentence: { color: color.ink, fontSize: 14, flexShrink: 1 },
+  goalGap: { ...tnum, fontSize: 12, marginTop: 2 },
+  deadline: { ...microLabel, ...tnum },
+  restLine: { color: color.muted, fontSize: 13, lineHeight: 19, paddingVertical: 2 },
+
+  strengthRow: { minHeight: hit.min, paddingVertical: space.sm },
+  strengthHead: {
     flexDirection: "row",
     alignItems: "baseline",
     justifyContent: "space-between",
     gap: space.md,
-    paddingTop: space.sm,
   },
-  /** The web's `border-t border-line pt-2`, suppressed on the first row. */
-  divided: { borderTopWidth: 1, borderTopColor: color.line, marginTop: space.sm },
-  muscleLabel: { color: color.ink, fontSize: 14, fontWeight: "500", flexShrink: 1 },
-  muscleFigure: { ...tnum, color: color.muted, fontSize: 12 },
+  strengthName: { color: color.ink, fontSize: 14, flexShrink: 1 },
+  strengthDelta: { ...tnum, fontSize: 14, fontWeight: "500" },
 
-  sentence: { marginTop: space.sm },
-  summary: { color: color.ink, fontSize: 14, lineHeight: 20, marginBottom: space.sm },
+  /*
+   * The "SO FAR" marker under the current week's bar. Positioned from the right
+   * because that is where the partial bucket always is — the alternative is
+   * computing a bar width in the screen, which is exactly what `BarSeries`
+   * exists to keep out of feature code.
+   */
+  soFar: { ...microLabel, textAlign: "right" },
 
-  stats: { flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", gap: space.lg },
-
-  coachAction: {
-    width: 44,
-    height: 44,
-    alignItems: "center",
-    justifyContent: "center",
+  consistency: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    justifyContent: "space-between",
+    gap: space.md,
   },
+  note: { color: color.muted, fontSize: 12, lineHeight: 18, marginTop: space.md },
+
+  coachAction: { width: hit.min, height: hit.min, alignItems: "center", justifyContent: "center" },
   coachGlyph: { color: color.accent, fontSize: 18 },
-
   centre: { paddingTop: space.xxl * 2, alignItems: "center" },
 });
 
 /**
- * Today — the landing surface, ported card-for-card from `src/app/page.tsx`.
+ * Today — a dashboard rather than a digest.
  *
- * Same cards in the same order, because the order is an argument: the live
- * session is time-sensitive and goes above everything; fuel is what the user
- * opened the app to check; train-next is the feature that replaces a split;
- * running sits above maintenance because the half marathon is the only goal
- * with a date on it; and maintenance is last because it changes weekly, not
- * hourly.
+ * What this screen used to do was restate the Food tab's macros, the Lift tab's
+ * owed-muscle rows and the Runs tab's weekly mileage, three taps away from all
+ * three. The owner's words were "it just repeats things". Nothing on this screen
+ * now prints today's kcal, today's protein, or a per-muscle `n/10 sets` row.
  *
- * What is different from the web is only the plumbing: one cached `bootstrap`
- * read instead of six server-component queries, four tap targets out to the
- * tabs instead of links, and pull-to-refresh instead of a page load.
+ * What is here instead is the four things that only exist because this app holds
+ * every half of the data at once, composed into one screen rather than four:
+ *
+ *   TRAJECTORY  where the body is going — bodyweight against measured intake,
+ *               the one measurement no other tab shows at all.
+ *   GOALS       what the owner wrote down, and the arithmetic distance to it.
+ *   STRENGTH    whether the lifts are actually moving.
+ *   LOAD        whether the work is going in, week over week.
+ *
+ * And above all of them, one sentence that says what to do in the next hour,
+ * because four concepts of equal weight is soup: one has to be the headline.
+ *
+ * Every figure on this screen comes out of `model.ts`, `verdict.ts` or
+ * `goals.ts`, all three of which are pure and unit-tested. There is no
+ * simulator in this container, so that is deliberate: the layout below is the
+ * only part nobody has watched run.
  */
 export default function TodayScreen() {
   const router = useRouter();
   const { data, loading, error, refreshing, onRefresh, retry } = useBootstrap();
 
   const goLift = () => router.navigate("/lift");
-  const goFood = () => router.navigate("/food");
   const goYou = () => router.navigate("/you");
   const goRuns = () => router.push("/runs");
+  const goCoach = () => router.push("/coach");
 
   const coachButton = (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel="Ask the coach"
-      onPress={() => { tapSelect(); router.push("/coach"); }}
+      onPress={() => { tapSelect(); goCoach(); }}
       style={({ pressed }) => [styles.coachAction, pressed && styles.pressed]}
     >
       <Text style={styles.coachGlyph}>◆</Text>
@@ -96,10 +160,9 @@ export default function TodayScreen() {
 
   /*
    * Nothing cached yet is the only state that cannot render the dashboard. Once
-   * there is a payload it is rendered unconditionally, even while a refetch is
+   * there is a payload it renders unconditionally, even while a refetch is
    * failing: a stale dashboard is the correct answer in a basement, and an
-   * error screen over data the phone is already holding would be a regression
-   * from the web app rather than an improvement on it.
+   * error screen over data the phone is already holding would be a regression.
    */
   if (!data) {
     return (
@@ -119,7 +182,8 @@ export default function TodayScreen() {
   }
 
   const m = buildTodayModel(data);
-  const [protein, carbs, fat] = m.fuel.macros;
+  const call = verdict(data);
+  const t = m.trajectory;
 
   return (
     <Screen
@@ -147,80 +211,325 @@ export default function TodayScreen() {
         </Pressable>
       )}
 
-      <Card>
-        <Label>Fuel</Label>
-        <View style={styles.figureRow}>
-          <Text style={styles.figure}>{m.fuel.kcal}</Text>
-          <Text style={styles.figureTail}>{m.fuel.targetLine}</Text>
-        </View>
-        <View style={styles.macros}>
-          {/*
-            Protein is `good` and the other two are not: it is the only macro
-            with a floor rather than a ceiling, so being at or over it is the
-            thing to show as healthy. `MacroBar` turns `warn` past 105% of
-            target by itself, which is what covers carbs and fat.
-          */}
-          <MacroBar label={protein.label} value={protein.value} target={protein.target} tone="good" />
-          <MacroBar label={carbs.label} value={carbs.value} target={carbs.target} />
-          <MacroBar label={fat.label} value={fat.value} target={fat.target} />
-        </View>
-        <NavLine onPress={goFood}>{m.fuel.mealLine}</NavLine>
-      </Card>
-
       {/*
-        This is what replaces a split. Ranked by volume debt gated on recovery,
-        computed from what was actually logged — so improvising never puts it
-        out of sync the way a fixed program does.
+        The sentence is the opening of a conversation, not a readout, so the
+        whole block is the door to the coach rather than carrying a button.
       */}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Ask the coach about this"
+        onPress={() => { tapSelect(); goCoach(); }}
+        style={({ pressed }) => [styles.verdictPress, pressed && styles.pressed]}
+      >
+        <View style={styles.verdictBlock}>
+          <Label>Today</Label>
+          <Text
+            style={[
+              styles.verdictText,
+              { color: call.tone === "warn" ? color.warn : color.ink },
+            ]}
+          >
+            {call.text}
+          </Text>
+        </View>
+      </Pressable>
+
       <Card>
-        <Label>Train next</Label>
-        <Text style={styles.summary}>{m.trainNext.summary}</Text>
-        {m.trainNext.emptyNote !== null && (
-          <Text style={styles.muted}>{m.trainNext.emptyNote}</Text>
-        )}
-        {m.trainNext.rows.map((row, i) => (
-          <View key={row.muscle} style={[styles.muscleRow, i > 0 && styles.divided]}>
-            <Text style={styles.muscleLabel}>{row.label}</Text>
-            <Text style={styles.muscleFigure}>{row.figure}</Text>
+        <Label>Trajectory · 28 days</Label>
+
+        <View style={styles.statRow}>
+          <View style={styles.statCol}>
+            <Stat label="TREND" value={t.trendLabel ?? "—"} />
           </View>
-        ))}
-        <NavLine onPress={goLift}>{m.trainNext.liftLine}</NavLine>
+          <View style={styles.statCol}>
+            {t.maintenance.kind === "ok" ? (
+              <Stat
+                label="MAINTENANCE"
+                value={t.maintenance.value}
+                hint={t.maintenance.hint}
+              />
+            ) : (
+              <Text style={styles.muted}>{t.maintenance.note}</Text>
+            )}
+          </View>
+        </View>
+
+        {t.weight !== null ? (
+          <WeightChart panel={t.weight} />
+        ) : (
+          <>
+            <Text style={styles.muted}>{t.weightNote}</Text>
+            <NavLine onPress={goYou}>Log weight →</NavLine>
+          </>
+        )}
+
+        {t.intake !== null && <IntakeChart panel={t.intake} />}
+
+        {(t.weight !== null || t.intake !== null) && (
+          <View style={styles.axis}>
+            <Text style={styles.axisLabel}>{t.xLabels.left}</Text>
+            <Text style={styles.axisLabel}>{t.xLabels.right}</Text>
+          </View>
+        )}
       </Card>
 
-      {m.running !== null && (
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => { tapSelect(); goRuns(); }}
-          style={({ pressed }) => pressed && styles.pressed}
-        >
-          <Card>
-            <Label>Running this week</Label>
-            <View style={styles.figureRow}>
-              <Text style={styles.figure}>{m.running.distanceMi}</Text>
-              <Text style={styles.figureTail}>{m.running.detail}</Text>
-            </View>
-            {m.running.warning !== null ? (
-              <Text style={[styles.warn, styles.sentence]}>{m.running.warning}</Text>
-            ) : (
-              <Text style={[styles.muted, styles.sentence]}>{m.running.note}</Text>
-            )}
-            <NavLine onPress={goRuns}>See the week →</NavLine>
-          </Card>
-        </Pressable>
-      )}
+      <Card>
+        <Label>Goals</Label>
+
+        {m.goals.empty !== null && <Text style={styles.muted}>{m.goals.empty}</Text>}
+
+        {m.goals.rows.map((row, i) => (
+          <GoalLine key={row.key} row={row} divided={i > 0} />
+        ))}
+
+        {m.goals.note !== null && <Text style={styles.muted}>{m.goals.note}</Text>}
+
+        {m.goals.rest.length > 0 && (
+          <View style={{ marginTop: space.md }}>
+            <Label>Also in your goals</Label>
+            {/*
+              Verbatim, with no figure beside them. This is the honest half of
+              the card: the app shows it has read the text without claiming it
+              understood it.
+            */}
+            {m.goals.rest.map((line, i) => (
+              <Text key={i} style={styles.restLine}>{line}</Text>
+            ))}
+          </View>
+        )}
+
+        <NavLine onPress={goYou}>Edit goals →</NavLine>
+      </Card>
 
       <Card>
-        <Label>Measured maintenance</Label>
-        {m.maintenance.status === "ok" ? (
-          <View style={styles.stats}>
-            <Stat label="TDEE" value={m.maintenance.tdee} hint={m.maintenance.hint} />
-            <Stat label="Trend" value={m.maintenance.trend} />
-          </View>
+        <Label>Strength · 8 weeks</Label>
+        {m.strength.length === 0 ? (
+          <Text style={styles.muted}>
+            Nothing with two logged sessions yet. Log the same lift twice and its trend
+            appears here.
+          </Text>
         ) : (
-          <Text style={styles.muted}>{m.maintenance.note}</Text>
+          m.strength.map((row, i) => (
+            <StrengthLine
+              key={row.exerciseId}
+              row={row}
+              divided={i > 0}
+              onPress={() => {
+                tapSelect();
+                router.push({ pathname: "/exercise", params: { id: row.exerciseId } });
+              }}
+            />
+          ))
         )}
-        <NavLine onPress={goYou}>Log weight →</NavLine>
+      </Card>
+
+      <Card>
+        <Label>Weekly hard sets</Label>
+        {m.load.empty ? (
+          <Text style={styles.muted}>Nothing logged in eight weeks.</Text>
+        ) : (
+          <LoadCharts load={m.load} />
+        )}
+        <NavLine onPress={goRuns}>See the running week →</NavLine>
+      </Card>
+
+      <Card>
+        <Label>Consistency</Label>
+        <View style={styles.consistency}>
+          {m.consistency.stats.map((s) => (
+            <Stat key={s.label} label={s.label} value={s.value} hint={s.hint} />
+          ))}
+        </View>
+        <Text style={styles.note}>{m.consistency.note}</Text>
       </Card>
     </Screen>
+  );
+}
+
+/**
+ * Bodyweight: the OLS fit as the only continuous mark, raw weigh-ins as marks.
+ *
+ * Two SVGs rather than one series with dots, because they are not one series.
+ * The line is `weightTrend()`'s model evaluated at two points; the circles are
+ * the measurements it was fitted to. Joining the circles would draw a second,
+ * worse model on top of the first and imply a weight for every day between two
+ * weigh-ins eight days apart.
+ */
+function WeightChart({ panel }: { panel: WeightPanel }) {
+  return (
+    <Chart
+      label="Bodyweight"
+      height={WEIGHT_H}
+      left={panel.firstLabel}
+      right={panel.lastLabel}
+    >
+      {(width, height) => (
+        <View style={{ width, height }}>
+          {panel.fit !== null && (
+            <Sparkline
+              values={panel.fit.values}
+              xs={panel.fit.xs}
+              domainX={panel.domainX}
+              domain={panel.domainY}
+              width={width}
+              height={height}
+              endDot={false}
+            />
+          )}
+          <View style={styles.overlay}>
+            <Sparkline
+              mode="dots"
+              values={panel.values}
+              xs={panel.xs}
+              domainX={panel.domainX}
+              domain={panel.domainY}
+              width={width}
+              height={height}
+            />
+          </View>
+        </View>
+      )}
+    </Chart>
+  );
+}
+
+/**
+ * Intake: a 7-day trailing mean against measured maintenance.
+ *
+ * No marker for today's partial intake. A live figure here would be restating
+ * the Food tab, which is the complaint this screen exists to answer — and a
+ * half-eaten day plotted against a full day's maintenance reads as a deficit
+ * that is not there.
+ */
+function IntakeChart({ panel }: { panel: IntakePanel }) {
+  return (
+    <Chart
+      label="Intake vs maintenance"
+      height={INTAKE_H}
+      right={panel.referenceLabel ?? undefined}
+    >
+      {(width, height) => (
+        <Sparkline
+          values={panel.values}
+          xs={panel.xs}
+          domainX={panel.domainX}
+          domain={panel.domainY}
+          reference={panel.reference}
+          width={width}
+          height={height}
+        />
+      )}
+    </Chart>
+  );
+}
+
+function GoalLine({ row, divided }: { row: GoalRow; divided: boolean }) {
+  const tone = row.gap.tone === "good"
+    ? color.good
+    : row.gap.tone === "muted" ? color.muted : color.ink;
+
+  return (
+    <View style={[styles.goalRow, divided && styles.divided]}>
+      <View style={styles.goalHead}>
+        <Text style={styles.goalSentence} numberOfLines={1}>{row.sentence}</Text>
+        {row.deadline !== null && (
+          <Text
+            style={[
+              styles.deadline,
+              { color: row.deadline.tone === "warn" ? color.warn : color.muted },
+            ]}
+          >
+            {row.deadline.label}
+          </Text>
+        )}
+      </View>
+      <Text style={[styles.goalGap, { color: tone }]}>{row.gap.text}</Text>
+    </View>
+  );
+}
+
+/**
+ * One lift's e1RM as a sparkline, and a door to the screen with the real axes.
+ *
+ * The sparkline carries no axis treatment and no tap-to-inspect layer on
+ * purpose: there is no pointer on this device, and the screen one tap away
+ * answers "what exactly" with numbers. A 32pt chart is for the shape.
+ */
+function StrengthLine(
+  { row, divided, onPress }: { row: StrengthRow; divided: boolean; onPress: () => void },
+) {
+  const tone = row.tone === "good" ? color.good : row.tone === "warn" ? color.warn : color.muted;
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${row.name} history`}
+      onPress={onPress}
+      style={({ pressed }) => [styles.strengthRow, divided && styles.divided, pressed && styles.pressed]}
+    >
+      <View style={styles.strengthHead}>
+        <Text style={styles.strengthName} numberOfLines={1}>{row.name}</Text>
+        {row.deltaLabel !== null
+          ? <Text style={[styles.strengthDelta, { color: tone }]}>{row.deltaLabel}</Text>
+          : <Label style={{ marginBottom: 0 }}>One session</Label>}
+      </View>
+      {/*
+        One point draws the point and nothing else — `Sparkline` falls back to
+        its terminal dot. A two-point line from a single session would be a
+        fabrication, and the label beside it says so.
+      */}
+      <Chart height={SPARK_H}>
+        {(width, height) => (
+          <Sparkline values={row.values} width={width} height={height} />
+        )}
+      </Chart>
+    </Pressable>
+  );
+}
+
+/**
+ * Eight weeks of working sets, and the same eight weeks of run mileage.
+ *
+ * Two panels, not two series on one. Sets and miles share no unit and no scale,
+ * and the only thing a second y-axis would add is a crossing point that reads
+ * as a finding.
+ */
+function LoadCharts({ load }: { load: LoadBlock }) {
+  return (
+    <>
+      <Chart
+        label="Sets"
+        height={SETS_H}
+        left={load.xLabels.left}
+        right={load.medianLabel ?? undefined}
+      >
+        {(width, height) => (
+          <BarSeries
+            values={load.hardSets}
+            reference={load.median > 0 ? load.median : null}
+            partialIndex={load.partialIndex}
+            width={width}
+            height={height}
+          />
+        )}
+      </Chart>
+      {/*
+        The current week is seven days of comparison against a Tuesday, which is
+        the easiest false signal on this screen — hence the 70% bar and this.
+      */}
+      <Text style={styles.soFar}>So far</Text>
+
+      <Chart label="Run miles" height={MILES_H} right={load.xLabels.right}>
+        {(width, height) => (
+          <BarSeries
+            values={load.runMiles}
+            tone="muted"
+            partialIndex={load.partialIndex}
+            width={width}
+            height={height}
+          />
+        )}
+      </Chart>
+    </>
   );
 }

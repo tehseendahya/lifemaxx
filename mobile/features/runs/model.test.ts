@@ -47,6 +47,8 @@ function bootstrap(runs: RunDto[], lowerBodyLiftDates: string[] = []): Bootstrap
     gyms: [],
     catalogue: [],
     lastSets: {},
+    // Not what this suite is about; the Today dashboard owns `history`.
+    history: { days: [], mainLifts: [] },
   };
 }
 

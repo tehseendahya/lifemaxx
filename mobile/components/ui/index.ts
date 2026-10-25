@@ -64,6 +64,12 @@
 
 export { Button } from "./Button";
 export { Card } from "./Card";
+/**
+ * The chart primitives. Added for the Today dashboard; `features/exercise` and
+ * `features/runs` both render a trend as text today and want the same shapes.
+ * Built on `react-native-svg`, which was already a dependency.
+ */
+export { BarSeries, Chart, Sparkline } from "./charts";
 export { Empty } from "./Empty";
 export { Label, microLabel } from "./Label";
 export { MacroBar } from "./MacroBar";

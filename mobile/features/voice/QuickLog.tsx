@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Modal, StyleSheet, Text, View } from "react-native";
 
 import { Button, NumberPad, color, space } from "@/components/ui";
@@ -9,21 +9,28 @@ import { ExercisePicker } from "@/features/lift";
 import type { CatalogueExercise, TranscribeResponse } from "@/lib/types";
 
 import { ConfirmSheet } from "./ConfirmSheet";
+import { GroupActions } from "./GroupActions";
 import { TextEntry } from "./TextEntry";
+import { TextPrompt } from "./TextPrompt";
 import { VoiceButton } from "./VoiceButton";
-import { learnAlias, parseSets } from "./requests";
+import { deleteExercise, learnAlias, parseSets } from "./requests";
 import {
   PAD_META,
+  aliasToLearn,
   blankRow,
+  createdExerciseIds,
+  deleteGroup,
   deleteRow,
   duplicateRow,
   fieldToPad,
+  groupRows,
+  markFirstWarmups,
   padToPatch,
+  patchGroup,
   patchRow,
   payloadsFor,
   refileEntry,
   rowsFromParse,
-  aliasToLearn,
   type LogRow,
   type PadField,
   type RowPatch,
@@ -37,6 +44,9 @@ const styles = StyleSheet.create({
 });
 
 type Stage = "idle" | "typing" | "confirming";
+
+/** What a note being typed is attached to. */
+type NoteTarget = { kind: "row"; key: string } | { kind: "group"; entryKey: string };
 
 /**
  * Type a set, check it, log it.
@@ -54,6 +64,13 @@ type Stage = "idle" | "typing" | "confirming";
  * *not* here is any decision about what the rows mean; that is all in `model.ts`
  * where it is unit tested, because "did 3 sets of 6" becoming two sets of three
  * is the kind of bug you only find in a gym.
+ *
+ * Every overlay the flow needs — the pad, the exercise picker, the group's bulk
+ * actions, the note editor — is a sibling of the confirmation sheet and is
+ * owned here. They all have to agree about which row or which entry is being
+ * edited, and threading that through a parent is how two of them end up
+ * disagreeing. They are siblings rather than nested because each is its own
+ * `Modal`: the later one draws over the sheet and the sheet does not move.
  */
 export function QuickLog({
   exerciseId,
@@ -96,6 +113,9 @@ export function QuickLog({
   const [editing, setEditing] = useState<{ key: string; field: PadField } | null>(null);
   const [padValue, setPadValue] = useState("");
   const [picking, setPicking] = useState<{ entryKey: string; query: string } | null>(null);
+  /** Which group's bulk-action sheet is open, by `entryKey`. */
+  const [bulkFor, setBulkFor] = useState<string | null>(null);
+  const [noting, setNoting] = useState<NoteTarget | null>(null);
 
   /**
    * Where CANCEL goes from the text screen.
@@ -106,7 +126,10 @@ export function QuickLog({
    */
   const [returnToSheet, setReturnToSheet] = useState(false);
 
-  const reset = useCallback(() => {
+  const groups = useMemo(() => groupRows(rows), [rows]);
+  const bulkGroup = groups.find((group) => group.entryKey === bulkFor) ?? null;
+
+  const clear = useCallback(() => {
     setStage("idle");
     setRows([]);
     setSourceText("");
@@ -116,8 +139,41 @@ export function QuickLog({
     setSheetError(null);
     setEditing(null);
     setPicking(null);
+    setBulkFor(null);
+    setNoting(null);
     setReturnToSheet(false);
   }, []);
+
+  /**
+   * Hand back an exercise the parse created and nothing now points at.
+   *
+   * Creation happens during the PARSE, not at confirm: the sheet needs a real
+   * exercise id before a set can reference one, and the outbox contract — a set
+   * upserted on `(workout_id, client_id)` — is the one thing in this app that
+   * must not change to accommodate a draft id. The cost is an orphan row with
+   * zero sets whenever a parse is re-filed or discarded, and this is how it is
+   * paid back.
+   *
+   * Fire and forget, and failure is deliberately silent. `DELETE
+   * /api/mobile/exercise` 409s when the exercise has sets (so it can never take
+   * history with it) and 404s when it is not the caller's; an unreachable
+   * server leaves an empty exercise in the catalogue, which is invisible in
+   * every screen that ranks by volume. None of that is worth a line of error
+   * text over a set the user is in the middle of logging.
+   */
+  const dropCreated = useCallback((ids: string[]) => {
+    for (const id of ids) {
+      void deleteExercise(id).catch(() => {
+        /* An unreferenced exercise is not worth telling the user about. */
+      });
+    }
+  }, []);
+
+  /** DISCARD: the rows go, and so does anything the parse created for them. */
+  const discard = useCallback(() => {
+    dropCreated(createdExerciseIds(rows));
+    clear();
+  }, [rows, dropCreated, clear]);
 
   const submit = useCallback(async (text: string) => {
     setBusy(true);
@@ -180,26 +236,45 @@ export function QuickLog({
     setEditing(null);
   }, [editing, padValue]);
 
-  const applyPick = useCallback((exercise: CatalogueExercise) => {
-    const target = picking;
-    setPicking(null);
-    if (target === null) return;
-
+  /**
+   * Re-file an entry onto a chosen exercise, and tidy up after the choice.
+   *
+   * Three things happen and all three are deliberate: the rows move, the
+   * wording is taught to the server so the same phrase is free next time, and
+   * an exercise this parse created on the way here is handed back. Without the
+   * third, correcting an auto-created "Incline Smith Press" onto the right lift
+   * would leave the wrong one in the catalogue forever — which is the duplicate
+   * the near-miss question exists to prevent, arriving by another road.
+   */
+  const refile = useCallback((entryKey: string, exercise: { id: string; name: string; equipment?: string }) => {
     // Read the alias off `rows` and send it here, outside the state updater.
     // React may call an updater more than once for the same update, and a
     // network request in one would then fire twice.
-    const alias = aliasToLearn(rows, target.entryKey, exercise);
+    const alias = aliasToLearn(rows, entryKey, exercise);
     if (alias !== null) {
       // Fire and forget. The alias makes the same wording free next time; it is
       // not worth blocking the sets the user is about to confirm, and the server
-      // de-duplicates so a retry is never needed.
+      // upserts so a repeat is harmless.
       void learnAlias(alias.exerciseId, alias.alias).catch(() => {
         /* The correction still applies locally. Nothing to tell the user. */
       });
     }
 
-    setRows((current) => refileEntry(current, target.entryKey, exercise));
-  }, [picking, rows]);
+    const orphaned = rows
+      .filter((row) => row.entryKey === entryKey && row.match === "new")
+      .map((row) => row.exerciseId)
+      .filter((id): id is string => id !== null && id !== exercise.id);
+    dropCreated([...new Set(orphaned)]);
+
+    setRows((current) => refileEntry(current, entryKey, exercise));
+  }, [rows, dropCreated]);
+
+  const applyPick = useCallback((exercise: CatalogueExercise) => {
+    const target = picking;
+    setPicking(null);
+    if (target === null) return;
+    refile(target.entryKey, exercise);
+  }, [picking, refile]);
 
   const confirm = useCallback(async () => {
     setSheetError(null);
@@ -218,7 +293,9 @@ export function QuickLog({
       tapDone();
       const n = rows.length;
       setNotice({ text: `${n} set${n === 1 ? "" : "s"} queued.`, bad: false });
-      reset();
+      // `clear`, not `discard`: an exercise the parse created is now referenced
+      // by a queued set and must survive.
+      clear();
       onConfirmed?.();
     } catch (err) {
       tapError();
@@ -227,9 +304,33 @@ export function QuickLog({
     } finally {
       setQueueing(false);
     }
-  }, [rows, sourceText, onBeforeLog, onConfirmed, reset]);
+  }, [rows, sourceText, onBeforeLog, onConfirmed, clear]);
 
   const meta = editing === null ? PAD_META.weight : PAD_META[editing.field];
+
+  /** The note being edited, and a line saying which set it belongs to. */
+  const notingText = (() => {
+    if (noting === null) return "";
+    if (noting.kind === "row") return rows.find((row) => row.key === noting.key)?.note ?? "";
+    // One shared note for a whole exercise: offer the first one as a starting
+    // point rather than an empty field, since "same as the others" is the
+    // commonest reason to use this at all.
+    return rows.find((row) => row.entryKey === noting.entryKey)?.note ?? "";
+  })();
+
+  const notingWhere = (() => {
+    if (noting === null) return undefined;
+    if (noting.kind === "group") {
+      const group = groups.find((g) => g.entryKey === noting.entryKey);
+      if (group === undefined) return undefined;
+      return `All ${group.rows.length} sets · ${group.exerciseName ?? group.query}`;
+    }
+    for (const group of groups) {
+      const at = group.rows.findIndex((row) => row.key === noting.key);
+      if (at !== -1) return `Set ${at + 1} · ${group.exerciseName ?? group.query}`;
+    }
+    return undefined;
+  })();
 
   return (
     <View>
@@ -279,7 +380,7 @@ export function QuickLog({
             setEntryError(null);
             return;
           }
-          reset();
+          discard();
         }}
       />
 
@@ -298,9 +399,17 @@ export function QuickLog({
         }}
         onOpenPad={openPad}
         onPatch={(key: string, patch: RowPatch) => setRows((c) => patchRow(c, key, patch))}
+        onOpenNote={(key) => setNoting({ kind: "row", key })}
         onDuplicate={(key) => setRows((c) => duplicateRow(c, key))}
         onDelete={(key) => setRows((c) => deleteRow(c, key))}
-        onPickExercise={(entryKey, query) => setPicking({ entryKey, query })}
+        onPickExercise={(entryKey, query) => {
+          // Closing the bulk sheet first: two `Modal`s presenting at once is
+          // the one thing that reliably leaves iOS showing neither.
+          setBulkFor(null);
+          setPicking({ entryKey, query });
+        }}
+        onUseNearMiss={(entryKey, nearMiss) => refile(entryKey, nearMiss)}
+        onBulk={(entryKey) => setBulkFor(entryKey)}
         onConfirm={() => void confirm()}
         onLogByHand={() => {
           tapSelect();
@@ -310,7 +419,47 @@ export function QuickLog({
             ),
           ]);
         }}
-        onClose={reset}
+        onClose={discard}
+      />
+
+      <GroupActions
+        group={bulkGroup}
+        onClose={() => setBulkFor(null)}
+        onPatchGroup={(entryKey, patch) => setRows((c) => patchGroup(c, entryKey, patch))}
+        onFirstWarmups={(entryKey, k) => setRows((c) => markFirstWarmups(c, entryKey, k))}
+        onNoteForAll={(entryKey) => {
+          setBulkFor(null);
+          setNoting({ kind: "group", entryKey });
+        }}
+        onPickExercise={(entryKey, query) => {
+          setBulkFor(null);
+          setPicking({ entryKey, query });
+        }}
+        onDeleteGroup={(entryKey) => {
+          setBulkFor(null);
+          // An exercise this parse created, whose every set has just been
+          // deleted, is referenced by nothing. Hand it back.
+          const group = groups.find((g) => g.entryKey === entryKey);
+          if (group?.match === "new" && group.exerciseId !== null) dropCreated([group.exerciseId]);
+          setRows((c) => deleteGroup(c, entryKey));
+        }}
+      />
+
+      <TextPrompt
+        visible={noting !== null}
+        title="Set note"
+        subtitle={notingWhere}
+        initialText={notingText}
+        onSubmit={(text) => {
+          const target = noting;
+          setNoting(null);
+          if (target === null) return;
+          setRows((c) =>
+            target.kind === "row"
+              ? patchRow(c, target.key, { note: text })
+              : patchGroup(c, target.entryKey, { note: text }));
+        }}
+        onCancel={() => setNoting(null)}
       />
 
       {/*
@@ -337,6 +486,9 @@ export function QuickLog({
         Full screen, over the sheet, pre-filled with the raw wording — so a
         correction is "pick the right one", not "type it from scratch". The sheet
         is left mounted underneath so the rows are still there when this closes.
+        `allowCreate` is left at its default: an unresolved phrase is the single
+        most likely reason this screen is open, and "preacher curl" has to have
+        an answer other than an empty list.
       */}
       <Modal
         visible={picking !== null}

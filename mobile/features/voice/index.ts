@@ -9,9 +9,15 @@
  *
  * `QuickLog` is the whole flow and the thing to drop into a screen. It is one
  * component rather than a button plus a separately-managed sheet because the
- * sheet, the number pad and the exercise picker all have to agree about which
- * row is being edited, and threading that through a parent is how two of them
- * end up disagreeing.
+ * sheet, the number pad, the exercise picker, the group's bulk actions and the
+ * note editor all have to agree about which row or which entry is being
+ * edited, and threading that through a parent is how two of them end up
+ * disagreeing.
+ *
+ * Inside the sheet the STATE is one row per set and the VIEW is one group per
+ * exercise — see `model.ts`. The owner's five-line paste is fifteen sets, and
+ * fifteen identical cards is not something anyone can check before tapping
+ * confirm.
  *
  * The typed path is the primary one and depends on nothing new: `/api/sets/parse`
  * has been in production since before this project. The mic is additive — with
@@ -28,4 +34,4 @@ export { VoiceButton } from "./VoiceButton";
 export { ConfirmSheet } from "./ConfirmSheet";
 export { TextEntry } from "./TextEntry";
 
-export type { LogRow, PadField, RowPatch } from "./model";
+export type { LogRow, MatchState, PadField, RowPatch, SetGroup, SetKind } from "./model";

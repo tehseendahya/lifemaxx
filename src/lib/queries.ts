@@ -9,6 +9,7 @@ import { hardSetsByMuscle, type CountedSet } from "./domain/muscles";
 import { rankMuscles, type MuscleState } from "./domain/readiness";
 import { estimateTdee, proteinTargetG, WINDOW_DAYS, type WeighIn } from "./domain/tdee";
 import { isRun, LOWER_BODY, weekStartOf, type Run } from "./domain/running";
+import { bestE1rm } from "./domain/e1rm";
 
 /** Local date string for a user's timezone — the app's unit of "a day". */
 export function localDate(tz: string, at: Date = new Date()): string {
@@ -326,4 +327,151 @@ export async function getRecentWeeklyRunningSummaries(userId: string, limit = 8)
     .where(eq(weeklyRunningSummaries.userId, userId))
     .orderBy(desc(weeklyRunningSummaries.weekStart))
     .limit(limit);
+}
+
+
+// ------------------------------------------------------------------ history
+
+/**
+ * How far back the Today dashboard's charts look.
+ *
+ * Eight weeks, which is the shortest window in which a weekly-volume bar chart
+ * has enough buckets to show a shape and an e1RM trend has enough sessions to
+ * be a trend rather than two dots. It is deliberately the same number as
+ * `RUNNING_LOOKBACK_DAYS`, because the Today screen plots lifting load and run
+ * mileage against one shared set of week buckets — two different lookbacks
+ * would silently truncate one of the two panels.
+ */
+export const HISTORY_LOOKBACK_DAYS = 56;
+
+/**
+ * Every weigh-in in the chart window.
+ *
+ * A sibling of `getWeighIns` rather than a parameter on it. `getWeighIns` is
+ * hard-capped at `WINDOW_DAYS` (28) and is the input to `estimateTdee`;
+ * widening it would change the measured maintenance figure the whole app is
+ * built on, which is not a charting decision to make by accident.
+ */
+export async function getBodyweightSeries(
+  userId: string,
+  today: string,
+  days = HISTORY_LOOKBACK_DAYS,
+): Promise<WeighIn[]> {
+  const rows = await db
+    .select({ localDate: bodyMetrics.localDate, weightKg: bodyMetrics.weightKg })
+    .from(bodyMetrics)
+    .where(and(
+      eq(bodyMetrics.userId, userId),
+      gte(bodyMetrics.localDate, shiftDate(today, -days)),
+      sql`${bodyMetrics.weightKg} is not null`,
+    ))
+    .orderBy(bodyMetrics.localDate);
+  return rows.map((r) => ({ localDate: r.localDate, weightKg: r.weightKg! }));
+}
+
+/**
+ * Working sets per day — whole sets, not muscle-weighted fractions.
+ *
+ * `hardSetsByMuscle()` answers a different question (how much stimulus each
+ * muscle got) and its numbers are larger, because one bench press set counts
+ * 1.0 to chest and 0.5 to triceps. The dashboard labels this one "WEEKLY HARD
+ * SETS" and means sets you did, so it is a plain count.
+ *
+ * Deliberately NOT filtered on `workouts.status`: the session in progress right
+ * now is part of today's load, and excluding it would make the current week's
+ * bar tick up only after the user remembered to press stop.
+ */
+export async function getDailyHardSets(
+  userId: string,
+  today: string,
+  days = HISTORY_LOOKBACK_DAYS,
+): Promise<{ localDate: string; hardSets: number }[]> {
+  return db
+    .select({
+      localDate: workouts.localDate,
+      hardSets: sql<number>`count(*)::int`,
+    })
+    .from(sets)
+    .innerJoin(workouts, eq(workouts.id, sets.workoutId))
+    .where(and(
+      eq(workouts.userId, userId),
+      eq(sets.isWarmup, false),
+      gte(workouts.localDate, shiftDate(today, -days)),
+    ))
+    .groupBy(workouts.localDate);
+}
+
+export interface MainLiftSeries {
+  exerciseId: string;
+  name: string;
+  /** Ascending by date, one point per session that produced a usable e1RM. */
+  points: { date: string; e1rmKg: number }[];
+}
+
+/**
+ * The lifts with the most logged sessions in the window, as e1RM over time.
+ *
+ * `bestE1rm()` is applied per (exercise, day) group in JS rather than reading
+ * the `sets.e1rm_kg` generated column with a `max()`. The column has no idea
+ * about `isReliableForStrength`, so a 20-rep back-off set produces an Epley
+ * number that is larger than the 5-rep top set and would plot as a PR. Running
+ * the domain function here means the phone's chart and the domain layer cannot
+ * disagree about what a session was worth — and it is also why a session of
+ * nothing but high-rep work drops out entirely instead of plotting a lie.
+ *
+ * Ordering is `distinct sessions desc, name asc`, so the three rows are stable
+ * across refreshes. Without the name tiebreak, two lifts trained the same
+ * number of times would swap places between requests.
+ */
+export async function getMainLiftE1rmSeries(
+  userId: string,
+  today: string,
+  lookbackDays = HISTORY_LOOKBACK_DAYS,
+  limit = 3,
+): Promise<MainLiftSeries[]> {
+  const rows = await db
+    .select({
+      exerciseId: sets.exerciseId,
+      name: exercises.name,
+      localDate: workouts.localDate,
+      reps: sets.reps,
+      weightKg: sets.weightKg,
+      isWarmup: sets.isWarmup,
+    })
+    .from(sets)
+    .innerJoin(workouts, eq(workouts.id, sets.workoutId))
+    .innerJoin(exercises, eq(exercises.id, sets.exerciseId))
+    .where(and(
+      eq(workouts.userId, userId),
+      eq(workouts.status, "completed"),
+      gte(workouts.localDate, shiftDate(today, -lookbackDays)),
+    ));
+
+  // (exercise, day) → that day's sets. A day rather than a workout id: two
+  // sessions in one day is one data point on a daily axis, and the better of
+  // the two is the honest one to plot.
+  const byExerciseDay = new Map<string, typeof rows>();
+  const names = new Map<string, string>();
+  for (const r of rows) {
+    names.set(r.exerciseId, r.name);
+    const key = `${r.exerciseId}\u0000${r.localDate}`;
+    byExerciseDay.set(key, [...(byExerciseDay.get(key) ?? []), r]);
+  }
+
+  const series = new Map<string, { date: string; e1rmKg: number }[]>();
+  for (const [key, daySets] of byExerciseDay) {
+    const best = bestE1rm(daySets);
+    if (best === null) continue;
+    const [exerciseId, date] = key.split("\u0000");
+    series.set(exerciseId, [...(series.get(exerciseId) ?? []), { date, e1rmKg: best }]);
+  }
+
+  return [...series.entries()]
+    .map(([exerciseId, points]) => ({
+      exerciseId,
+      name: names.get(exerciseId) ?? "",
+      points: points.sort((a, b) => a.date.localeCompare(b.date)),
+    }))
+    .sort((a, b) => b.points.length - a.points.length || a.name.localeCompare(b.name))
+    .slice(0, limit);
 }

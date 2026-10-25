@@ -1,4 +1,4 @@
-import { apiPost, apiUpload } from "@/lib/api";
+import { apiDelete, apiPost, apiUpload } from "@/lib/api";
 import type { ParseResponse, TranscribeResponse } from "@/lib/types";
 
 /**
@@ -32,6 +32,22 @@ export function parseSets(text: string): Promise<ParseResponse> {
  */
 export function learnAlias(exerciseId: string, alias: string): Promise<{ ok: true }> {
   return apiPost<{ ok: true }>("/api/mobile/exercise/alias", { exerciseId, alias });
+}
+
+/**
+ * Hand back an exercise the parse created and nothing ended up pointing at.
+ *
+ * The server only honours this for a user-owned exercise with **zero** sets —
+ * it 409s otherwise — so this cannot take history with it however wrong the
+ * caller is. Every call site treats a failure as nothing: an unreferenced
+ * exercise is invisible in every screen that ranks by volume, and a failed
+ * clean-up is not news in the middle of logging a set.
+ *
+ * The route is `DELETE` with the id in the query string rather than in a body,
+ * because a body on a DELETE is not reliably readable across proxies.
+ */
+export function deleteExercise(id: string): Promise<{ ok: true }> {
+  return apiDelete<{ ok: true }>(`/api/mobile/exercise?id=${encodeURIComponent(id)}`);
 }
 
 /**

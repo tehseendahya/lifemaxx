@@ -1,7 +1,8 @@
-import { Animated, Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import { Animated, Modal, Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { ReactNode } from "react";
 
+import { sheetMaxHeight } from "./sheet-size";
 import { color, radius, space } from "./tokens";
 import { useSlideIn } from "./useSlideIn";
 
@@ -39,6 +40,22 @@ const styles = StyleSheet.create({
  *
  * The backdrop is tappable to close. A sheet that can only be dismissed by its
  * own button is a sheet the user has to aim at.
+ *
+ * ── THE PANEL IS CAPPED, AND IT HAS TO BE ──────────────────────────────────
+ *
+ * `styles.root` is `justifyContent: "flex-end"`, so a panel taller than the
+ * screen does not overflow downward — it overflows UPWARD, past y=0. The
+ * confirmation sheet grew one card per set and at fifteen sets its title
+ * rendered behind the status bar clock. `maxHeight` is therefore not a nicety:
+ * without it, a tall sheet puts its own title out of reach and off screen.
+ *
+ * A capped panel means a tall child has to scroll instead, which is the
+ * caller's job — see `ConfirmSheet`, and note that the scrolling child needs
+ * `flexShrink: 1` rather than `flex: 1` inside an auto-height panel.
+ *
+ * The cap also fixes `useSlideIn`'s travel: it measures the panel, and a panel
+ * that could be taller than the screen could animate from further away than
+ * the screen is tall.
  */
 export function Sheet({ visible, onClose, children, title }: {
   visible: boolean;
@@ -47,6 +64,7 @@ export function Sheet({ visible, onClose, children, title }: {
   title?: string;
 }) {
   const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
   const { mounted, onPanelLayout, backdropStyle, panelStyle } = useSlideIn(visible);
 
   if (!mounted) return null;
@@ -65,7 +83,14 @@ export function Sheet({ visible, onClose, children, title }: {
 
         <Animated.View
           onLayout={onPanelLayout}
-          style={[styles.panel, panelStyle, { paddingBottom: insets.bottom + space.lg }]}
+          style={[
+            styles.panel,
+            panelStyle,
+            {
+              paddingBottom: insets.bottom + space.lg,
+              maxHeight: sheetMaxHeight(windowHeight, insets.top),
+            },
+          ]}
         >
           <View style={styles.grabber} />
           {title ? <Text style={styles.title}>{title}</Text> : null}
