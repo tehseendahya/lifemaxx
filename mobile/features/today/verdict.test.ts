@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { bootstrap, day, liftHistory, ranked, run, TODAY } from "./fixture";
 import { verdict } from "./verdict";
+import { agrees, refersTo } from "./model";
 
 /**
  * One test per rung of the ladder, plus the voice rules over every branch.
@@ -118,7 +119,7 @@ describe("rung 3 — mid-session", () => {
   it("names what is still short", () => {
     const b = bootstrap({ activeWorkout: active });
     expect(verdict(b)).toEqual({
-      text: "You're mid-session. Rear Delts is still 10 sets short this week.",
+      text: "You're mid-session. Rear Delts are still 10 sets short this week.",
       tone: "ink",
     });
   });
@@ -135,7 +136,7 @@ describe("rung 3 — mid-session", () => {
 describe("rung 4 — owed and recovered", () => {
   it("names the muscle, the debt, the recency and the instruction", () => {
     expect(verdict(bootstrap())).toEqual({
-      text: "Rear Delts is 10 sets short this week and you last hit it 9 days ago. "
+      text: "Rear Delts are 10 sets short this week and you last hit them 9 days ago. "
         + "Train Rear Delts.",
       tone: "ink",
     });
@@ -146,7 +147,7 @@ describe("rung 4 — owed and recovered", () => {
       volume: { summary: "", ranked: [ranked({ muscle: "trap", label: "Traps", daysSinceTrained: null })] },
     });
     expect(verdict(b).text).toBe(
-      "Traps is 10 sets short this week and you've never logged it. Train Traps.",
+      "Traps are 10 sets short this week and you've never logged them. Train Traps.",
     );
   });
 
@@ -286,6 +287,52 @@ describe("voice", () => {
       const sentences = text.split(/(?<=\.)\s+/).filter(Boolean);
       expect(sentences.length).toBeLessThanOrEqual(2);
       expect(text.endsWith(".")).toBe(true);
+    }
+  });
+});
+
+// ------------------------------------------------------- subject agreement
+
+describe("it agrees with the muscle it names", () => {
+  /*
+   * 15 of the 18 muscle labels are plural, so a hard-coded "is" read wrong far
+   * more often than right — "Rear Delts is 10 sets short" was on the screen.
+   * Verb and pronoun both have to follow the label.
+   */
+  const owed = (muscle: string, label: string) => bootstrap({
+    volume: {
+      summary: "",
+      ranked: [ranked({ muscle: muscle as never, label, score: 1, daysSinceTrained: 9 })],
+    },
+  });
+
+  it("says 'are' and 'them' for a plural label", () => {
+    const text = verdict(owed("rear_delt", "Rear Delts")).text;
+    expect(text).toContain("Rear Delts are");
+    expect(text).not.toContain("Rear Delts is");
+    expect(text).toMatch(/hit them|logged them/);
+  });
+
+  it("says 'is' and 'it' for a singular label", () => {
+    const text = verdict(owed("chest", "Chest")).text;
+    expect(text).toContain("Chest is");
+    expect(text).not.toContain("Chest are");
+    expect(text).toMatch(/hit it|logged it/);
+  });
+
+  it("agrees for every label the domain can produce", () => {
+    const plurals = ["Front Delts", "Side Delts", "Rear Delts", "Lats", "Traps", "Biceps",
+      "Triceps", "Forearms", "Quads", "Hamstrings", "Glutes", "Calves", "Abs",
+      "Adductors", "Abductors"];
+    const singulars = ["Chest", "Upper Back", "Lower Back"];
+
+    for (const label of plurals) {
+      expect(agrees(label), label).toBe("are");
+      expect(refersTo(label), label).toBe("them");
+    }
+    for (const label of singulars) {
+      expect(agrees(label), label).toBe("is");
+      expect(refersTo(label), label).toBe("it");
     }
   });
 });

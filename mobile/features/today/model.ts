@@ -117,6 +117,26 @@ export function formatDuration(totalSec: number): string {
 export const plural = (n: number, word: string): string =>
   `${n} ${word}${n === 1 ? "" : "s"}`;
 
+/**
+ * Muscle labels are mostly plural — "Rear Delts", "Lats", "Quads",
+ * "Hamstrings", "Calves" — and three are not: "Chest", "Upper Back",
+ * "Lower Back". 15 of the 18 are plural, so a hard-coded "is" was wrong far
+ * more often than it was right, and the verdict sentence read "Rear Delts is
+ * 10 sets short".
+ *
+ * Testing the last letter is enough for this closed set and nothing else:
+ * every plural label ends in s, no singular one does, and `muscleLabel` is the
+ * only source of these strings. A real pluraliser would be a library for a
+ * problem that is eighteen rows long.
+ */
+export const isPluralLabel = (label: string): boolean => label.endsWith("s");
+
+/** "are" for Rear Delts, "is" for Chest. */
+export const agrees = (label: string): string => (isPluralLabel(label) ? "are" : "is");
+
+/** "them" for Rear Delts, "it" for Chest. */
+export const refersTo = (label: string): string => (isPluralLabel(label) ? "them" : "it");
+
 /** Always signed. "0.4 lb/wk" is ambiguous in the one direction that matters. */
 export const signed = (n: number, digits = 0): string =>
   `${n > 0 ? "+" : n < 0 ? "−" : ""}${Math.abs(n).toFixed(digits)}`;

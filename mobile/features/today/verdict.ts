@@ -6,7 +6,7 @@
 import { WEEKLY_SET_TARGET, volumeStatus } from "../../lib/shared/muscles";
 import { LOWER_BODY, averagePaceSecPerMile, detectInterference } from "../../lib/shared/running";
 import type { Bootstrap, RankedMuscle } from "../../lib/types";
-import { liftDaysIn, plural, shiftIso } from "./model";
+import { agrees, liftDaysIn, plural, refersTo, shiftIso } from "./model";
 
 /**
  * One sentence: what to do in the next hour.
@@ -102,7 +102,7 @@ export function verdict(b: Bootstrap): Verdict {
   if (b.activeWorkout !== null) {
     return {
       text: top && owed(top)
-        ? `You're mid-session. ${top.label} is still ${plural(setsShort(top), "set")} `
+        ? `You're mid-session. ${top.label} ${agrees(top.label)} still ${plural(setsShort(top), "set")} `
           + "short this week."
         : "You're mid-session. Nothing's behind — finish on feel.",
       tone: "ink",
@@ -113,10 +113,10 @@ export function verdict(b: Bootstrap): Verdict {
   if (top !== null && owed(top)) {
     if (recovered(top)) {
       const since = top.daysSinceTrained === null
-        ? "you've never logged it"
-        : `you last hit it ${plural(top.daysSinceTrained, "day")} ago`;
+        ? `you've never logged ${refersTo(top.label)}`
+        : `you last hit ${refersTo(top.label)} ${plural(top.daysSinceTrained, "day")} ago`;
       return {
-        text: `${top.label} is ${plural(setsShort(top), "set")} short this week and ${since}. `
+        text: `${top.label} ${agrees(top.label)} ${plural(setsShort(top), "set")} short this week and ${since}. `
           + `Train ${top.label}.`,
         tone: "ink",
       };
@@ -132,7 +132,7 @@ export function verdict(b: Bootstrap): Verdict {
     const trained = top.daysSinceTrained === 0 ? "today" : "yesterday";
     return {
       text: alternative
-        ? `${top.label} is short but you trained it ${trained}. Do ${alternative.label} instead.`
+        ? `${top.label} ${agrees(top.label)} short but you trained ${refersTo(top.label)} ${trained}. Do ${alternative.label} instead.`
         : "Everything that's behind, you trained in the last 48 hours. Take today off.",
       tone: "ink",
     };
