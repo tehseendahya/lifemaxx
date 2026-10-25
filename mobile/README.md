@@ -361,3 +361,80 @@ above is the real control rather than the build.
 Nothing about **gestures, haptics, the keyboard, scroll feel, tap latency,
 audio recording or the camera** is verified, and none of it can be without a
 phone. The first genuine test of this app is the first QR scan.
+
+## Running it without a laptop
+
+The short answer to "can I publish it to Expo Go and stop running the dev
+server": **yes, but you republish for every change**, and there is one trap in
+the config that silently removes the Expo Go option entirely.
+
+### What changed, and why the usual advice is out of date
+
+The flow people remember — `expo publish`, then open it in Expo Go with no dev
+server — was **Classic Updates**, and it was removed in SDK 50. SDK 49 was the
+last version that supported it. This project is on SDK 58, so `expo publish`
+does not exist here and no amount of configuration brings it back.
+
+The replacement is **EAS Update**: `eas update` builds the JS bundle, uploads
+it, and serves it from EAS. Expo Go can open your own project's published
+updates, so the laptop-free path still exists — it is just a different command
+and a different set of rules.
+
+### The trap: do not add `runtimeVersion`
+
+Every EAS Update guide tells you to set `runtimeVersion` in `app.json`. **Do
+not do that here.** An update published with a `runtimeVersion` cannot be
+loaded by Expo Go at all — it requires a development build with
+`expo-dev-client`, which means a native build and an Apple Developer account,
+which is the thing this project deliberately avoids.
+
+`app.json` therefore has no `runtimeVersion` on purpose. Expo Go falls back to
+matching on the SDK version, which is what makes it able to open the bundle.
+If a future guide, or a tool's `--fix`, adds that field, the Expo Go path dies
+quietly: the QR scans, and the update simply never loads.
+
+`expo-updates` is likewise not in `package.json`. It ships inside the Expo Go
+binary, and most of its API (`reloadAsync`, `setExtraParamAsync`,
+`getExtraParamsAsync`) is a no-op in Expo Go regardless, so installing it buys
+nothing here and adds a native module to the dependency gate for no reason.
+
+### Doing it
+
+These have to run on your machine, not in a cloud session — `api.expo.dev` and
+`u.expo.dev` are blocked by this environment's egress policy, which is also why
+none of this is verified end to end from here.
+
+```bash
+cd mobile
+npx eas-cli@latest login          # your Expo account
+npx eas-cli@latest init           # creates the EAS project; writes extra.eas.projectId
+npx eas-cli@latest update --branch main --message "what changed"
+```
+
+`init` is the step that adds `extra.eas.projectId` to `app.json` — it is left
+out of version control here because it is specific to your account, not to the
+project.
+
+The `update` command prints a URL and a QR code. Scan it with Expo Go and the
+app runs with no dev server and no laptop.
+
+### Answering the second half of the question
+
+**Changes do not appear by themselves.** `eas update` publishes a snapshot.
+Editing a file on your machine does nothing to the published bundle; you run
+`eas update` again and reopen it. It is a publish step, not live reload — the
+dev server's fast refresh is the only thing that updates as you type, and that
+needs the laptop.
+
+So, roughly: dev server for iterating, `eas update` for carrying a build to the
+gym.
+
+### Two caveats worth knowing before you rely on it
+
+- Since 12 May 2026, Expo Go only loads EAS Update projects you own or that
+  belong to an organisation you are in. Signing in to Expo Go with the same
+  account you ran `eas login` with is therefore not optional.
+- There is an open report of EAS Updates failing to load in Expo Go **on
+  Android** for SDK 57, with iOS unaffected. This project targets iOS and is on
+  SDK 58, so it probably does not apply — but it has not been confirmed from
+  here, and a failure to load rather than a crash is what it would look like.
