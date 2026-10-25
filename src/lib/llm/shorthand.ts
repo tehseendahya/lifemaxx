@@ -5,6 +5,18 @@
  * people actually type, costs nothing, and works with the phone in airplane
  * mode — so it runs FIRST on every text entry, and the model is only called when
  * this returns nothing. Most gym entries never touch the network.
+ *
+ * Three rules govern every change in here, in this order:
+ *
+ *  1. A silently wrong number is the worst outcome available. A set logged as
+ *     165 reps corrupts the trend chart and nothing on screen looks odd. A
+ *     model call costs a round trip; a parse failure is visible in the
+ *     confirmation sheet. Both are preferable.
+ *  2. Structure that is recognised but numerically implausible is AMBIGUOUS and
+ *     the chunk is dropped (see `SANITY`). Structure that is not recognised at
+ *     all fails the whole line, which hands it to the model intact.
+ *  3. Every form added here is one the owner can log offline, instantly, with
+ *     no chance of a hallucinated number. That is the whole point of the file.
  */
 
 export interface ParsedSet {
@@ -18,9 +30,94 @@ export interface ParsedSet {
 export interface ParsedEntry {
   exercise_query: string;
   sets: ParsedSet[];
+  /**
+   * Chunks that were set-shaped but failed `SANITY` and were therefore NOT
+   * logged — "165" out of "165,5". Optional and additive: the model path does
+   * not produce it. Surfacing it in the confirmation sheet is how a dropped
+   * chunk stays visible rather than silent.
+   */
+  dropped?: string[];
 }
 
 const KG_TO_LB = 2.2046226218;
+
+/**
+ * Bounds that separate "a set" from "a typo".
+ *
+ * `maxReps: 100` — the owner typed "165,5" meaning "165x5" and got a set of
+ * 165 reps at 165 lb. Three-digit rep counts are overwhelmingly a weight that
+ * lost its `x`. Genuine three-digit sets exist only in bodyweight work
+ * (pushups, situps, air squats) and 100 is where people round off; above it we
+ * would rather pay for a model call than record a number we do not believe.
+ * Because an over-ceiling chunk is DROPPED rather than failing the line, a real
+ * 120-rep set written on its own still reaches the model and still gets logged.
+ *
+ * `maxWeightLb: 2000` — the heaviest loaded machine work in a commercial gym
+ * (leg press, hack squat) tops out around 1,000–1,400 lb, so 2000 clears any
+ * human effort while still catching a digit slip like "16500x5".
+ *
+ * `maxSetCount: 30` — 30 working sets of one exercise in one session is already
+ * past any program; beyond that "165 sets" would mint 165 identical rows.
+ */
+export const SANITY = {
+  minReps: 1,
+  maxReps: 100,
+  maxWeightLb: 2000,
+  maxSetCount: 30,
+} as const;
+
+/**
+ * Leading filler, as a small CLOSED list.
+ *
+ * "today did bench 165x5" must yield "bench", not "today did bench". This is
+ * deliberately NOT an open-ended stop-word heuristic: an open list eventually
+ * eats a real exercise name ("Press", "Row", "Good morning"), and a set filed
+ * against the wrong exercise is rule 1. Longest first so "i did" wins over
+ * "did".
+ */
+const LEADING_FILLER = [
+  "finished with",
+  "i did",
+  "today",
+  "also",
+  "then",
+  "next",
+  "and",
+  "did",
+] as const;
+
+/** Weight: a number, or bodyweight with optional added load. */
+const WEIGHT = String.raw`(bw\s*(?:\+\s*\d+(?:\.\d+)?)?|\d+(?:\.\d+)?)`;
+const UNIT = String.raw`kgs?|lbs?|pounds?`;
+/**
+ * What may follow a unit suffix. `\b` is useless here: in "30kgx8" there is no
+ * boundary between the "g" and the "x", which is exactly why "3 sets 30kgx8"
+ * used to parse as nothing at all.
+ */
+const UNIT_TAIL = String.raw`(?=[x×]\s*\d|\s|,|$)`;
+
+const RE_IS_KG = new RegExp(String.raw`\d\s*kgs?${UNIT_TAIL}|\bkgs?\b`, "i");
+const RE_UNIT_AFTER_NUMBER = new RegExp(String.raw`(\d)\s*(?:${UNIT})${UNIT_TAIL}`, "gi");
+const RE_UNIT_BARE = new RegExp(String.raw`\b(?:${UNIT})\b`, "gi");
+
+const chunkRe = (body: string) => new RegExp(`^${body}$`, "i");
+
+/** "5x5 185" — leading count is SETS, then reps, then weight. */
+const RE_SETS_X_REPS_WEIGHT = chunkRe(String.raw`(\d+)\s*[x×]\s*(\d+)\s+${WEIGHT}`);
+/** "185x5" — weight first, one set. */
+const RE_WEIGHT_X_REPS = chunkRe(String.raw`${WEIGHT}\s*[x×]\s*(\d+)`);
+/** "185 for 8" / "bw+25 for 8" */
+const RE_WEIGHT_FOR_REPS = chunkRe(String.raw`${WEIGHT}\s+for\s+(\d+)`);
+/** "3 sets 155x7" / "3 sets of 155 x 7" */
+const RE_N_SETS_WEIGHT_X_REPS = chunkRe(
+  String.raw`(\d+)\s*sets?(?:\s+of)?\s+${WEIGHT}\s*[x×]\s*(\d+)`,
+);
+/** "2 sets 20kg for 8" — the kg is already gone by the time this runs. */
+const RE_N_SETS_WEIGHT_FOR_REPS = chunkRe(
+  String.raw`(\d+)\s*sets?(?:\s+of)?\s+${WEIGHT}\s+for\s+(\d+)`,
+);
+/** A bare rep count continuing the previous weight: "8,8,6" — and "for 6". */
+const RE_BARE_REPS = chunkRe(String.raw`(?:for\s+)?(\d+)`);
 
 /** "@rpe8", "@8", "rpe 8.5" */
 function extractRpe(text: string): { rpe: number | null; rest: string } {
@@ -54,21 +151,121 @@ function toLb(value: number, isKg: boolean): number {
   return isKg ? Math.round(value * KG_TO_LB * 10) / 10 : value;
 }
 
+/** A weight token from any of the forms above, in lb. */
+function weightOf(token: string, isKg: boolean): number {
+  const bw = parseBodyweight(token);
+  // Bodyweight's added load is written in whatever unit the line used, but a
+  // bare "bw" is zero in both.
+  return bw !== null ? toLb(bw, isKg && bw > 0) : toLb(Number(token), isKg);
+}
+
+function stripLeadingFiller(text: string): string {
+  let out = text.trim();
+  for (let guard = 0; guard < LEADING_FILLER.length * 2; guard++) {
+    const before = out;
+    for (const word of LEADING_FILLER) {
+      const re = new RegExp(`^${word}\\b[\\s,]*`, "i");
+      if (re.test(out)) {
+        out = out.replace(re, "");
+        break;
+      }
+    }
+    if (out === before) break;
+  }
+  return out.trim();
+}
+
+/** `null` means the numbers are outside `SANITY` — the caller drops the chunk. */
+function makeSet(
+  reps: number,
+  weightLb: number,
+  rpe: number | null,
+  flags: { toFailure: boolean; isWarmup: boolean },
+): ParsedSet | null {
+  if (!Number.isInteger(reps) || reps < SANITY.minReps || reps > SANITY.maxReps) return null;
+  if (!Number.isFinite(weightLb) || weightLb < 0 || weightLb > SANITY.maxWeightLb) return null;
+  return {
+    reps,
+    weight_lb: weightLb,
+    rpe,
+    to_failure: flags.toFailure,
+    is_warmup: flags.isWarmup,
+  };
+}
+
+/** Structure recognised, numbers implausible. Drop the chunk, keep the line. */
+const AMBIGUOUS = "ambiguous" as const;
+/** Structure not recognised at all. Fail the line so the model sees it whole. */
+const UNPARSED = "unparsed" as const;
+
+function repeat(set: ParsedSet | null, count: number): ParsedSet[] | typeof AMBIGUOUS {
+  if (!set) return AMBIGUOUS;
+  if (!Number.isInteger(count) || count < 1 || count > SANITY.maxSetCount) return AMBIGUOUS;
+  return Array.from({ length: count }, () => ({ ...set }));
+}
+
+function parseChunk(
+  chunk: string,
+  previous: ParsedSet | undefined,
+  isKg: boolean,
+  flags: { toFailure: boolean; isWarmup: boolean },
+): ParsedSet[] | typeof AMBIGUOUS | typeof UNPARSED {
+  const { rpe, rest } = extractRpe(chunk);
+  const c = rest.trim().replace(/\s+/g, " ");
+
+  // "3 sets 155x7" — N sets, weight, reps.
+  let m = c.match(RE_N_SETS_WEIGHT_X_REPS);
+  if (m) return repeat(makeSet(Number(m[3]), weightOf(m[2], isKg), rpe, flags), Number(m[1]));
+
+  // "2 sets 20kg for 8"
+  m = c.match(RE_N_SETS_WEIGHT_FOR_REPS);
+  if (m) return repeat(makeSet(Number(m[3]), weightOf(m[2], isKg), rpe, flags), Number(m[1]));
+
+  // "5x5 185" — sets x reps, then weight.
+  m = c.match(RE_SETS_X_REPS_WEIGHT);
+  if (m) return repeat(makeSet(Number(m[2]), weightOf(m[3], isKg), rpe, flags), Number(m[1]));
+
+  // "185x5" — weight x reps, a single set.
+  m = c.match(RE_WEIGHT_X_REPS);
+  if (m) {
+    const set = makeSet(Number(m[2]), weightOf(m[1], isKg), rpe, flags);
+    return set ? [set] : AMBIGUOUS;
+  }
+
+  // "185 for 8" / "bw+25 for 8"
+  m = c.match(RE_WEIGHT_FOR_REPS);
+  if (m) {
+    const set = makeSet(Number(m[2]), weightOf(m[1], isKg), rpe, flags);
+    return set ? [set] : AMBIGUOUS;
+  }
+
+  // A bare rep count continues the previous set's weight: "8,8,6"
+  m = c.match(RE_BARE_REPS);
+  if (m && previous) {
+    const set = makeSet(Number(m[1]), previous.weight_lb, rpe, flags);
+    return set ? [{ ...previous, ...set }] : AMBIGUOUS;
+  }
+
+  return UNPARSED;
+}
+
 /**
- * Parse one exercise's worth of shorthand. Returns null when nothing
- * set-shaped is found, which is the signal to fall through to the model.
+ * Parse ONE exercise's worth of shorthand — one line, or one semicolon-
+ * separated clause. Returns null when nothing set-shaped is found, which is the
+ * signal to fall through to the model.
  */
 export function parseEntry(input: string): ParsedEntry | null {
-  const raw = input.trim();
+  const raw = stripLeadingFiller(input.trim());
   if (!raw) return null;
 
-  // A unit suffix sits flush against the number ("100kg"), where there is no
-  // word boundary between the digit and the letter — so match on the digit.
-  const isKg = /\d\s*kgs?\b/i.test(raw) || /\bkgs?\b/i.test(raw);
+  // A unit suffix sits flush against the number ("100kg", "30kgx8"), where
+  // there is no word boundary between the digit and the letter — so match on
+  // the digit and on what follows the unit.
+  const isKg = RE_IS_KG.test(raw);
   const flags = extractFlags(raw);
-  let text = flags.rest
-    .replace(/(\d)\s*(?:kgs?|lbs?|pounds?)\b/gi, "$1 ")
-    .replace(/\b(?:kgs?|lbs?|pounds?)\b/gi, " ");
+  const text = flags.rest
+    .replace(RE_UNIT_AFTER_NUMBER, "$1 ")
+    .replace(RE_UNIT_BARE, " ");
 
   // The exercise name is everything before the first numeric/bw token.
   const tokens = text.split(/[\s,]+/).filter(Boolean);
@@ -80,67 +277,80 @@ export function parseEntry(input: string): ParsedEntry | null {
 
   const body = text.slice(text.indexOf(tokens[firstNumeric]));
   const sets: ParsedSet[] = [];
+  const dropped: string[] = [];
 
-  // Split on commas and "then" — each chunk is one or more identical sets.
+  // Split on commas and "then"/"and" — each chunk is one or more identical sets.
   for (const chunkRaw of body.split(/\s*(?:,|\bthen\b|\band\b)\s*/i)) {
     const chunk = chunkRaw.trim();
     if (!chunk) continue;
 
-    const { rpe, rest } = extractRpe(chunk);
-    const c = rest.trim();
-
-    // "5x5 185" — sets x reps, then weight.
-    let m = c.match(/^(\d+)\s*[x×]\s*(\d+)\s+(bw\s*(?:\+\s*\d+(?:\.\d+)?)?|\d+(?:\.\d+)?)$/i);
-    if (m) {
-      const count = Number(m[1]);
-      const reps = Number(m[2]);
-      const bw = parseBodyweight(m[3]);
-      const weight = bw ?? Number(m[3]);
-      for (let i = 0; i < count; i++) {
-        sets.push({ reps, weight_lb: toLb(weight, isKg), rpe, to_failure: flags.toFailure, is_warmup: flags.isWarmup });
-      }
+    const produced = parseChunk(chunk, sets[sets.length - 1], isKg, flags);
+    if (produced === UNPARSED) return null; // let the model try the whole line
+    if (produced === AMBIGUOUS) {
+      // Recognised shape, unbelievable number. Dropping it is what turns the
+      // owner's "165x5, 165,5" into two sets of 5 at 165 instead of one set of
+      // 165 reps — and it never invents a value.
+      dropped.push(chunk);
       continue;
     }
-
-    // "185x5" — weight x reps, a single set.
-    m = c.match(/^(bw\s*(?:\+\s*\d+(?:\.\d+)?)?|\d+(?:\.\d+)?)\s*[x×]\s*(\d+)$/i);
-    if (m) {
-      const bw = parseBodyweight(m[1]);
-      const weight = bw ?? Number(m[1]);
-      sets.push({ reps: Number(m[2]), weight_lb: toLb(weight, isKg), rpe, to_failure: flags.toFailure, is_warmup: flags.isWarmup });
-      continue;
-    }
-
-    // "185 for 8" / "bw+25 for 8"
-    m = c.match(/^(bw\s*(?:\+\s*\d+(?:\.\d+)?)?|\d+(?:\.\d+)?)\s+for\s+(\d+)$/i);
-    if (m) {
-      const bw = parseBodyweight(m[1]);
-      const weight = bw ?? Number(m[1]);
-      sets.push({ reps: Number(m[2]), weight_lb: toLb(weight, isKg), rpe, to_failure: flags.toFailure, is_warmup: flags.isWarmup });
-      continue;
-    }
-
-    // A bare rep count continues the previous set's weight: "8,8,6"
-    m = c.match(/^(\d+)$/);
-    if (m && sets.length > 0) {
-      sets.push({ ...sets[sets.length - 1], reps: Number(m[1]), rpe });
-      continue;
-    }
-
-    return null; // Something we don't understand — let the model try.
+    sets.push(...produced);
   }
 
-  return sets.length > 0 ? { exercise_query: exercise, sets } : null;
+  if (sets.length === 0) return null;
+  return dropped.length > 0
+    ? { exercise_query: exercise, sets, dropped }
+    : { exercise_query: exercise, sets };
 }
 
-/** Handles "bench 5x5 185; squat 225x5" and newline-separated entries. */
+/** One line of the input, either understood or handed on. */
+export type LineResult =
+  | { kind: "entry"; entry: ParsedEntry }
+  | { kind: "unparsed"; line: string };
+
+/**
+ * Parse each line INDEPENDENTLY and report both halves.
+ *
+ * This is the fix for the owner's paste. Blank lines are separators, not
+ * errors. A line this parser cannot read no longer poisons the lines it can:
+ * it comes back under `unparsed` so the caller can send just that line to the
+ * model and concatenate the results. Before this, one unsupported line sent the
+ * entire paste — including four lines of perfectly good shorthand — to the
+ * model, which is where the hallucinated numbers came from.
+ */
+export function parseLines(input: string): LineResult[] {
+  return input
+    .split(/[\n;]+/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const entry = parseEntry(line);
+      return entry ? { kind: "entry" as const, entry } : { kind: "unparsed" as const, line };
+    });
+}
+
+/**
+ * All-or-nothing: "bench 5x5 185; squat 225x5" and newline-separated entries.
+ *
+ * Kept deliberately strict for callers that have no model to fall back on (the
+ * web `SetLogger`): half a workout logged with no indication of what is missing
+ * is worse than none of it. Callers that CAN reach the model should use
+ * `parseLines` instead, which loses nothing.
+ */
 export function parseShorthand(input: string): ParsedEntry[] {
-  const lines = input.split(/[\n;]+/).map((l) => l.trim()).filter(Boolean);
-  const entries: ParsedEntry[] = [];
-  for (const line of lines) {
-    const entry = parseEntry(line);
-    if (!entry) return [];
-    entries.push(entry);
-  }
-  return entries;
+  const results = parseLines(input);
+  if (results.some((r) => r.kind === "unparsed")) return [];
+  return results.map((r) => (r as { kind: "entry"; entry: ParsedEntry }).entry);
+}
+
+/**
+ * Round every weight to a whole pound.
+ *
+ * The owner's "20kg" rendered as "44.1 lb" and nobody loads a tenth of a pound.
+ * This belongs at the DISPLAY edge, not in `parseEntry`: the parser keeps full
+ * precision so the kg round-trip assertions stay exact, and `parse-sets.ts`
+ * applies this on the way out, where the number the confirmation sheet shows is
+ * also the number it will write back. Storage stays kg.
+ */
+export function roundSetsToDisplayLb<T extends { weight_lb: number }>(sets: T[]): T[] {
+  return sets.map((s) => ({ ...s, weight_lb: Math.round(s.weight_lb) }));
 }
