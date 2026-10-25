@@ -474,28 +474,63 @@ project does not use.
 run regardless. It is in Expo Go's bundled native modules (`~58.0.18`), so it
 does not break the Expo Go dependency gate.
 
-### The API URL has to be deployed, not your laptop
+### The published app's config lives in EAS, not in `.env`
 
-`EXPO_PUBLIC_*` values are inlined into the bundle when it is exported. If
-`EXPO_PUBLIC_API_BASE_URL` is a LAN address like `http://192.168.x.x:3000`, the
-published app calls your laptop for every request and fails whenever it is off
-— the exact thing publishing is meant to avoid.
+`EXPO_PUBLIC_*` values are inlined into the bundle when it is exported, and
+`npm run publish` passes `--environment production` (required from SDK 55).
+**With `--environment`, EAS supplies the variables from the EAS environment
+and the local `.env` files are not used.** The first publish of this project
+proved it the hard way: the EAS environment was empty, and the uploaded bundle
+contained neither the API URL nor the Supabase URL — the app would have opened
+to a "not configured" sign-in screen. A local `npx expo export` without
+`--environment` looked fine, which is exactly why that test was not enough.
 
-`eas update` exports in production mode, and Expo loads `.env.production` over
-`.env` in that mode. So:
-
-- `mobile/.env` — your laptop's LAN URL, for `npx expo start`
-- `mobile/.env.production` — the deployed Vercel URL, for `npm run publish`
-
-Both are gitignored. The production file only needs the one line:
+So the three values are set in the EAS **production** environment:
 
 ```bash
-EXPO_PUBLIC_API_BASE_URL=https://lifemaxx-tehseendahyas-projects.vercel.app
+npx eas-cli@latest env:list --environment production
 ```
 
-The Supabase values fall through from `.env`. **The deployment it points at
-must include the `/api/mobile/*` routes** — they are not on `main` until this
-branch is merged, and the production alias 404s them until then.
+They are `plaintext` deliberately: none is a secret (the anon key is built to
+ship in clients, and anything `EXPO_PUBLIC_` is readable in the bundle anyway).
+To change one, e.g. after moving the API:
+
+```bash
+npx eas-cli@latest env:update --environment production \
+  --variable-name EXPO_PUBLIC_API_BASE_URL --value https://new-host.example
+```
+
+`mobile/.env` is still what `npx expo start` reads, so local development keeps
+pointing at your laptop's LAN address. **Never let that LAN address reach the
+EAS environment** — a published app with it would call your laptop for every
+request.
+
+The API must be a deployment that includes the `/api/mobile/*` routes. It is
+`https://lifemaxx-tehseendahyas-projects.vercel.app` (production, `main`).
+`lifemaxx.vercel.app` is somebody else's project — never point the app at it.
+
+**Verify any publish** by searching what was actually uploaded, not what was
+configured. The bundle is Hermes bytecode, so use a byte search:
+
+```bash
+python3 -c "import glob;b=open(glob.glob('dist/_expo/static/js/ios/*.hbc')[0],'rb').read();print('api',b.count(b'lifemaxx-tehseendahyas-projects.vercel.app'),'lan',b.count(b'192.168.'))"
+```
+
+`api 1 lan 0` is correct. `api 0` means the publish shipped without config.
+
+### Opening it on the phone
+
+The project has a `main` channel pointing at the `main` branch, which gives one
+**permanent** link that always resolves to the newest publish:
+
+```
+exp://u.expo.dev/74dacced-64fc-4a90-84c8-05e5650302e4?channel-name=main&runtime-version=exposdk:58.0.0
+```
+
+Open it (or scan it as a QR) on the iPhone with Expo Go signed in as
+`tehseendahya` — since 12 May 2026 Expo Go only loads EAS Updates for projects
+your account owns. After the next `npm run publish`, the same link serves the
+new version; fully close and reopen the app to pick it up.
 
 ### Doing it
 
@@ -504,6 +539,7 @@ cd mobile
 npx eas-cli@latest login      # once
 npx eas-cli@latest init       # once; already done for @tehseendahya/lifemaxx
 npm run publish               # every time you want changes on the phone
+# config comes from `eas env:list --environment production`, not from .env
 ```
 
 `npm run publish` is
