@@ -20,25 +20,26 @@ import type { Muscle } from "./schema";
  * alias first, trigram similarity second (src/lib/exercises.ts) — so an alias
  * that isn't here is a lift that either gets invented as a duplicate row or
  * gets matched confidently to the wrong machine. "incline smith press" landing
- * on Incline Barbell Press is not a near miss; it's a different movement with
- * a different load, averaged into the same trend line.
+ * on Incline Barbell Press is not a near miss; it's a different movement at a
+ * different load, averaged into the same trend line.
  *
  * So every entry carries the forms people actually type: abbreviations, both
- * plurals, the equipment said first and last, and the misspellings that show
- * up on a phone keyboard mid-set.
+ * plurals, the equipment said first and said last, and the misspellings that
+ * happen on a phone keyboard mid-set.
  *
  * Two invariants, both asserted in catalogue.test.ts:
  *
  *   1. Every alias is unique across the whole catalogue. The seed writes
- *      aliases with onConflictDoNothing against a unique index on
- *      (alias, user_id), so a collision does not fail loudly — it silently
- *      attaches the alias to whichever entry seeded first. The test is the
+ *      aliases with onConflictDoNothing, so a collision does not fail loudly —
+ *      it silently attaches the alias to whichever entry seeded first and
+ *      leaves the other exercise unreachable by that name. The test is the
  *      only thing standing between a duplicate and a mystery mismatch.
- *      Note the seed also derives two aliases per entry — the slug with
- *      spaces, and the lowercased name — so those count too.
+ *      Note the seed derives two more aliases per entry — the slug with
+ *      spaces, and the lowercased name — so those count too; `aliasesFor`
+ *      below is what the test checks, and it includes them.
  *
- *   2. Every muscle key is a member of MUSCLES. It's a Postgres enum; an
- *      invented name is a seed-time error, not a type error.
+ *   2. Every muscle key is a member of MUSCLES. It's a Postgres enum, so an
+ *      invented name is a seed-time error rather than a type error.
  *
  * ---------------------------------------------------------------- slugs
  *
@@ -162,7 +163,7 @@ export const CATALOGUE: CatalogueEntry[] = [
     muscles: { front_delt: 1, side_delt: 0.5, tricep: 0.5 } },
   { name: "Machine Shoulder Press", slug: "machine-shoulder-press", equipment: "machine", incrementLb: 10,
     aliases: ["shoulder press machine", "machine overhead press", "machine ohp",
-      "seated shoulder press machine"],
+      "seated shoulder press machine", "hammer strength shoulder press"],
     muscles: { front_delt: 1, side_delt: 0.5, tricep: 0.5 } },
   { name: "Landmine Press", slug: "landmine-press", equipment: "barbell", isUnilateral: true, incrementLb: 5,
     aliases: ["landmine presses", "single arm landmine press", "landmine shoulder press",
@@ -316,7 +317,8 @@ export const CATALOGUE: CatalogueEntry[] = [
     aliases: ["goblet squats", "kettlebell goblet squat", "db goblet squat"],
     muscles: { quad: 1, glute: 0.5, adductor: 0.5 } },
   { name: "Leg Press", slug: "leg-press", equipment: "machine", incrementLb: 10,
-    aliases: ["legpress", "leg press machine", "45 degree leg press", "horizontal leg press"],
+    aliases: ["legpress", "leg press machine", "45 degree leg press", "horizontal leg press",
+      "seated leg press"],
     muscles: { quad: 1, glute: 0.5 } },
   { name: "Single-Leg Press", slug: "single-leg-press", equipment: "machine", isUnilateral: true, incrementLb: 10,
     aliases: ["one leg press", "unilateral leg press", "single leg press machine"],
@@ -365,6 +367,9 @@ export const CATALOGUE: CatalogueEntry[] = [
     aliases: ["hex bar deadlift", "trap bar dl", "hex bar dl", "trap bar deadlifts",
       "hex bar dead lift"],
     muscles: { quad: 1, glute: 1, hamstring: 0.5, lower_back: 1, trap: 0.5 } },
+  { name: "Smith Machine Deadlift", slug: "smith-machine-deadlift", equipment: "machine", incrementLb: 5,
+    aliases: ["smith deadlift", "smith machine dl", "smith deadlifts", "smith machine rdl"],
+    muscles: { hamstring: 1, glute: 1, lower_back: 1, trap: 0.5 } },
   { name: "Romanian Deadlift", slug: "romanian-deadlift", equipment: "barbell", incrementLb: 5,
     aliases: ["rdl", "rdls", "romanian", "romanian deadlifts", "barbell rdl"],
     muscles: { hamstring: 1, glute: 1, lower_back: 0.5 } },
@@ -469,7 +474,8 @@ export const CATALOGUE: CatalogueEntry[] = [
       "cable rope hammer curl", "cable rope hammer curls", "rope curl"],
     muscles: { bicep: 1, forearm: 1 } },
   { name: "Cable Curl", slug: "cable-curl", equipment: "cable", incrementLb: 5,
-    aliases: ["cable curls", "cable bicep curl", "low cable curl", "standing cable curl"],
+    aliases: ["cable curls", "cable bicep curl", "low cable curl", "standing cable curl",
+      "seated cable curl"],
     muscles: { bicep: 1, forearm: 0.5 } },
   { name: "Bayesian Curl", slug: "bayesian-curl", equipment: "cable", incrementLb: 5,
     aliases: ["bayesian curls", "behind the body cable curl", "bayesian cable curl"],
