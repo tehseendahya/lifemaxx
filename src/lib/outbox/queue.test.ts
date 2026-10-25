@@ -22,8 +22,15 @@ describe("retry classification", () => {
 
   it("gives up on a payload the server will never accept", () => {
     expect(classifyStatus(400)).toBe("permanent");
-    expect(classifyStatus(401)).toBe("permanent");
     expect(classifyStatus(404)).toBe("permanent");
+    expect(classifyStatus(422)).toBe("permanent");
+  });
+
+  it("retries an auth failure rather than discarding the write", () => {
+    // The payload is fine; the token expired. Dropping it would lose a logged
+    // set because a session lapsed, which is the opposite of the queue's job.
+    expect(classifyStatus(401)).toBe("retry");
+    expect(classifyStatus(403)).toBe("retry");
   });
 
   it("treats a 2xx as delivered", () => {

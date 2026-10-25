@@ -1,4 +1,5 @@
-import { QueryClient } from "@tanstack/react-query";
+import { AppState } from "react-native";
+import { QueryClient, focusManager } from "@tanstack/react-query";
 
 /**
  * Reads only.
@@ -26,6 +27,30 @@ export const queryClient = new QueryClient({
     },
   },
 });
+
+/**
+ * `refetchOnWindowFocus` does nothing on a phone until this runs.
+ *
+ * react-query's focus manager listens for a DOM `visibilitychange` event, and
+ * nothing in React Native dispatches one — so the flag above was inert.
+ * Combined with expo-router keeping tab screens mounted after their first
+ * visit (no remount, therefore no refetch) and no `refetchInterval` anywhere,
+ * Today would sit on an hour-old payload until the user thought to pull down.
+ *
+ * `active` only. `inactive` is the app switcher and a half-swiped notification
+ * shade, which are not the user leaving; treating them as a blur and then as a
+ * focus would fire a refetch every time somebody peeked at a message.
+ *
+ * Called once from the root layout rather than at module scope: a subscription
+ * created as an import side effect is one nothing can ever remove, which in a
+ * Fast Refresh session means a new listener on every save.
+ */
+export function startFocusTracking(): () => void {
+  const sub = AppState.addEventListener("change", (status) => {
+    focusManager.setFocused(status === "active");
+  });
+  return () => sub.remove();
+}
 
 export const queryKeys = {
   bootstrap: ["bootstrap"] as const,

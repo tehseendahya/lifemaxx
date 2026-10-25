@@ -72,6 +72,11 @@ export function classifyStatus(status: number): "ok" | "retry" | "permanent" {
   if (status >= 200 && status < 300) return "ok";
   // 408 and 429 are 4xx but explicitly mean "try again".
   if (status === 408 || status === 429) return "retry";
+  // 401 and 403 are about the credential, not the payload. The set is valid
+  // and will deliver once the session is refreshed, so dropping it would
+  // destroy good data over an expired token — the precise thing the outbox
+  // exists to prevent. Everything else in the 4xx range really is the payload.
+  if (status === 401 || status === 403) return "retry";
   if (status >= 400 && status < 500) return "permanent";
   return "retry";
 }

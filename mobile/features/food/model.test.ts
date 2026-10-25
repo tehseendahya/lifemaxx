@@ -1,0 +1,246 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  analyzedFromMealItems,
+  asMealSlot,
+  dayDelta,
+  defaultSlot,
+  draftTotals,
+  emptyDraftItem,
+  formatIsoDateLabel,
+  formatMacroLine,
+  mealSummaryLine,
+  newDraftKey,
+  patchItem,
+  relativeDayLabel,
+  removeItem,
+  resizeForLongestEdge,
+  shiftIsoDate,
+  slotForHour,
+  toAnalyzed,
+  toDraft,
+  type AnalyzedItem,
+} from "./model";
+import type { MealDto } from "../../lib/types";
+
+/** The shape the analysis endpoint actually returns, two items, one fractional. */
+const analyzed: AnalyzedItem[] = [
+  { name: "Scrambled eggs", qty: 3, unit: "large", kcal: 215, protein_g: 19, carbs_g: 2, fat_g: 15 },
+  { name: "Sourdough toast", qty: 2, unit: "slices", kcal: 180.4, protein_g: 6.2, carbs_g: 34, fat_g: 2 },
+];
+
+describe("the API boundary", () => {
+  it("maps snake_case to camelCase without losing a field", () => {
+    const [eggs, toast] = toDraft(analyzed);
+
+    expect(eggs).toMatchObject({
+      name: "Scrambled eggs", qty: 3, unit: "large",
+      kcal: 215, proteinG: 19, carbsG: 2, fatG: 15,
+    });
+    expect(toast).toMatchObject({ proteinG: 6.2, carbsG: 34, fatG: 2, kcal: 180.4 });
+  });
+
+  it("maps camelCase back to snake_case for the save", () => {
+    expect(toAnalyzed(toDraft(analyzed))).toEqual(analyzed);
+  });
+
+  it("does not round macros on the way out", () => {
+    // The server rounds kcal itself and stores grams as numerics. Rounding here
+    // too would shave a tenth of a gram off every item on every save.
+    const [, toast] = toAnalyzed(toDraft(analyzed));
+    expect(toast.kcal).toBe(180.4);
+    expect(toast.protein_g).toBe(6.2);
+  });
+
+  it("gives a blanked-out name something to render as", () => {
+    const [item] = toAnalyzed([{ ...emptyDraftItem(), name: "   " }]);
+    expect(item.name).toBe("Item");
+  });
+
+  it("trims a name the user typed with a trailing space", () => {
+    const [item] = toAnalyzed([{ ...emptyDraftItem(), name: "  Olive oil " }]);
+    expect(item.name).toBe("Olive oil");
+  });
+
+  it("maps a logged meal's camelCase items back for a repeat", () => {
+    expect(analyzedFromMealItems([
+      { name: "Chicken thigh", qty: 200, unit: "g", kcal: 430, proteinG: 38, carbsG: 0, fatG: 30 },
+    ])).toEqual([
+      { name: "Chicken thigh", qty: 200, unit: "g", kcal: 430, protein_g: 38, carbs_g: 0, fat_g: 30 },
+    ]);
+  });
+
+  it("mints a distinct key per row, so two items with the same name are separable", () => {
+    const items = toDraft([analyzed[0], analyzed[0]]);
+    expect(items[0].key).not.toBe(items[1].key);
+    expect(newDraftKey()).not.toBe(newDraftKey());
+  });
+});
+
+describe("the live total", () => {
+  it("sums every macro across the items", () => {
+    expect(draftTotals(toDraft(analyzed))).toEqual({
+      kcal: 395.4, proteinG: 25.2, carbsG: 36, fatG: 17,
+    });
+  });
+
+  it("is zero for an empty card", () => {
+    expect(draftTotals([])).toEqual({ kcal: 0, proteinG: 0, carbsG: 0, fatG: 0 });
+  });
+
+  it("recomputes after an edit, which is the whole point of the review step", () => {
+    const items = toDraft(analyzed);
+    // The user decides the toast was buttered: 180 kcal becomes 280, fat 2 → 13.
+    const edited = patchItem(items, items[1].key, { kcal: 280, fatG: 13 });
+
+    expect(formatMacroLine(draftTotals(items))).toBe("395 kcal · 25p 36c 17f");
+    expect(formatMacroLine(draftTotals(edited))).toBe("495 kcal · 25p 36c 28f");
+  });
+
+  it("recomputes after a removal", () => {
+    const items = toDraft(analyzed);
+    expect(formatMacroLine(draftTotals(removeItem(items, items[0].key))))
+      .toBe("180 kcal · 6p 34c 2f");
+  });
+
+  it("counts an appended empty item as zero rather than as NaN", () => {
+    const items = [...toDraft(analyzed), emptyDraftItem()];
+    expect(draftTotals(items).kcal).toBe(395.4);
+  });
+
+  it("leaves rows other than the patched one untouched", () => {
+    const items = toDraft(analyzed);
+    const edited = patchItem(items, items[0].key, { kcal: 1 });
+    expect(edited[1]).toEqual(items[1]);
+  });
+});
+
+describe("the default slot, by the hour", () => {
+  // The five boundaries the web app's thresholds create. These are the cases
+  // where an off-by-one files breakfast as lunch.
+  it.each([
+    ["09:59", 9, 59, "breakfast"],
+    ["10:00", 10, 0, "lunch"],
+    ["14:59", 14, 59, "lunch"],
+    ["20:59", 20, 59, "dinner"],
+    ["21:00", 21, 0, "snack"],
+  ] as const)("%s is %s", (_label, hour, minute, slot) => {
+    expect(defaultSlot(new Date(2026, 9, 25, hour, minute))).toBe(slot);
+  });
+
+  it("files the small hours as breakfast, as the web does", () => {
+    expect(slotForHour(0)).toBe("breakfast");
+    expect(slotForHour(23)).toBe("snack");
+  });
+
+  it("narrows a logged meal's slot string for a repeat, with a fallback", () => {
+    // `MealDto.slot` is a plain string. A repeat has to post a member of the
+    // route's union back, and an unrecognised value has to land somewhere
+    // rather than be rejected.
+    expect(asMealSlot("dinner")).toBe("dinner");
+    expect(asMealSlot("brunch")).toBe("snack");
+    expect(asMealSlot("")).toBe("snack");
+    expect(asMealSlot("Dinner")).toBe("snack");
+  });
+});
+
+describe("resizing to the longest edge", () => {
+  it("constrains the width of a landscape photo", () => {
+    expect(resizeForLongestEdge(4032, 3024, 1024)).toEqual({ width: 1024 });
+  });
+
+  it("constrains the height of a portrait photo", () => {
+    // The bug this exists to prevent: resize({width:1024}) here yields
+    // 1024×1365, which is 40% more pixels than asked for.
+    expect(resizeForLongestEdge(3024, 4032, 1024)).toEqual({ height: 1024 });
+  });
+
+  it("does nothing to a photo that is already small enough", () => {
+    expect(resizeForLongestEdge(800, 600, 1024)).toBeNull();
+    expect(resizeForLongestEdge(1024, 1024, 1024)).toBeNull();
+  });
+
+  it("does nothing when the picker reported no usable dimensions", () => {
+    expect(resizeForLongestEdge(0, 0, 1024)).toBeNull();
+    expect(resizeForLongestEdge(Number.NaN, 1200, 1024)).toBeNull();
+  });
+
+  it("picks width for an exact square over the limit", () => {
+    expect(resizeForLongestEdge(2000, 2000, 1024)).toEqual({ width: 1024 });
+  });
+});
+
+describe("the date stepper", () => {
+  it("steps back and forward a day", () => {
+    expect(shiftIsoDate("2026-10-25", -1)).toBe("2026-10-24");
+    expect(shiftIsoDate("2026-10-24", 1)).toBe("2026-10-25");
+  });
+
+  it("crosses a month and a year boundary", () => {
+    expect(shiftIsoDate("2026-11-01", -1)).toBe("2026-10-31");
+    expect(shiftIsoDate("2027-01-01", -1)).toBe("2026-12-31");
+  });
+
+  it("crosses a leap day", () => {
+    expect(shiftIsoDate("2028-02-28", 1)).toBe("2028-02-29");
+    expect(shiftIsoDate("2028-03-01", -1)).toBe("2028-02-29");
+  });
+
+  it("steps across a DST transition without losing the day", () => {
+    // 2026-11-01 is the US fall-back. Local-midnight arithmetic lands on the
+    // same calendar day here; UTC arithmetic does not.
+    expect(shiftIsoDate("2026-11-01", -1)).toBe("2026-10-31");
+    expect(shiftIsoDate("2026-03-08", -1)).toBe("2026-03-07");
+  });
+
+  it("counts whole days between two dates", () => {
+    expect(dayDelta("2026-10-25", "2026-10-25")).toBe(0);
+    expect(dayDelta("2026-10-24", "2026-10-25")).toBe(-1);
+    expect(dayDelta("2026-10-18", "2026-10-25")).toBe(-7);
+    expect(dayDelta("2026-10-26", "2026-10-25")).toBe(1);
+  });
+
+  it("names the day the way the stepper reads it", () => {
+    expect(relativeDayLabel("2026-10-25", "2026-10-25")).toBe("today");
+    expect(relativeDayLabel("2026-10-24", "2026-10-25")).toBe("yesterday");
+    expect(relativeDayLabel("2026-10-21", "2026-10-25")).toBe("4d ago");
+  });
+
+  it("formats the subtitle from UTC parts, so the label cannot drift a day", () => {
+    expect(formatIsoDateLabel("2026-10-25")).toBe("Sun 25 Oct");
+    expect(formatIsoDateLabel("2026-01-01")).toBe("Thu 1 Jan");
+  });
+});
+
+describe("the day list's one-line summary", () => {
+  const meal = (over: Partial<MealDto>): MealDto => ({
+    id: "m1", slot: "lunch", note: "", source: "photo", confidence: 0.8,
+    kcal: 520, proteinG: 38, carbsG: 44, fatG: 18, items: [], ...over,
+  });
+
+  it("prefers the item names", () => {
+    expect(mealSummaryLine(meal({
+      note: "a sentence nobody needs to read",
+      items: [
+        { name: "Rice", qty: 1, unit: "cup", kcal: 200, proteinG: 4, carbsG: 44, fatG: 1 },
+        { name: "Chicken", qty: 200, unit: "g", kcal: 320, proteinG: 34, carbsG: 0, fatG: 17 },
+      ],
+    }))).toBe("Rice, Chicken");
+  });
+
+  it("falls back to the note when the items are nameless", () => {
+    expect(mealSummaryLine(meal({
+      note: "two slices of pizza",
+      items: [{ name: " ", qty: null, unit: null, kcal: 520, proteinG: 38, carbsG: 44, fatG: 18 }],
+    }))).toBe("two slices of pizza");
+  });
+
+  it("always has something to render", () => {
+    expect(mealSummaryLine(meal({}))).toBe("Meal");
+  });
+
+  it("formats a logged meal's macros with the same line as the review card", () => {
+    expect(formatMacroLine({ kcal: 520, proteinG: 38, carbsG: 44, fatG: 18 }))
+      .toBe("520 kcal · 38p 44c 18f");
+  });
+});

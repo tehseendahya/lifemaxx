@@ -1,13 +1,8 @@
-import { Placeholder } from "@/lib/placeholder";
-// INTEGRATION: replace the import above with
-//   import YouScreen from "@/features/you";
-// and the element below with <YouScreen />.
-
-export default function You() {
-  return (
-    <Placeholder
-      title="You"
-      note="Weight entry at the top, then goals, the API base URL and sign-out. Owned by the you workstream."
-    />
-  );
-}
+/**
+ * The You tab.
+ *
+ * The feature folder is `features/settings`, not `features/you`: the tab is
+ * named for the user and the folder is named for what is in it (weigh-in,
+ * goals, the API connection, sign-out).
+ */
+export { default } from "@/features/settings";

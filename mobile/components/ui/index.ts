@@ -29,9 +29,22 @@
  * 4. NO `Alert.alert`, NO `confirm`. Use `<Sheet>`. Nothing the user does on
  *    purpose gets confirmed by a system dialog in a system typeface.
  *
- * 5. NO `TextInput` FOR NUMBERS. Use `<NumberPad>`. The system keyboard is
- *    permitted in exactly two places in this app: the exercise search field
- *    and the coach's message field.
+ * 5. NO `TextInput` FOR NUMBERS, EVER. Use `<NumberPad>`. Not one numeric
+ *    field in this app opens the system keyboard — that is the direct fix for
+ *    the keyboard, tap-latency and layout-displacement complaints, and a
+ *    `keyboardType="numeric"` anywhere is a regression.
+ *
+ *    A `TextInput` for *text* is fine, and there are nine of them. The rule
+ *    was first written as "exactly two places" and that was wrong within a
+ *    week, so here is the real list, which is also the test: every one of
+ *    these is prose the user composes, never a figure.
+ *
+ *      exercise search · coach composer · spoken/typed set entry ·
+ *      meal note · meal item name · set note · goals · email · password ·
+ *      the API base URL
+ *
+ *    Adding a tenth is a decision, not a violation; adding a numeric one is a
+ *    violation.
  *
  * 6. MINIMUM TAP TARGET 44pt (`hit.min`). The primary action in a flow is 56
  *    (`hit.big`) or 72 (`hit.huge`) — `<Button size="lg">` or `size="hero"`.

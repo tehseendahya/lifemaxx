@@ -1,60 +1,108 @@
 # lifemaxx — native iOS client
 
-The phone client. The Next.js app in the parent directory stays exactly as it
-is: it remains the backend for this app and the UI on a laptop. This is not a
+The phone client. The Next.js app in the parent directory is unchanged: it
+stays the backend for this app and the UI on a laptop. This is not a
 replacement for it and does not aim at feature parity with it.
 
 Built to run in **Expo Go**, which shapes nearly every decision below.
 
 ---
 
-## Running it
+## Run it
+
+You need a Mac (or any machine that can run Node), an iPhone, and **Expo Go**
+from the App Store. Nothing else — no Apple Developer account, no Xcode, no
+TestFlight, no EAS build.
 
 ```bash
-# once, from the repo root — the mobile typecheck needs the root's node_modules
+# 1. once, from the repo root. The mobile typecheck reads the root's
+#    node_modules, so this is a prerequisite even though mobile/ has its own.
+cd lifemaxx
 npm install
 
-# then
+# 2. the mobile project has its own, separate tree
 cd mobile
 npm install
+
+# 3. configure (see the next section) — three values, or nothing loads
+cp .env.example .env
+$EDITOR .env
+
+# 4. go
 npx expo start
 ```
 
-Install **Expo Go** from the App Store, open the camera, scan the QR code in the
-terminal. That is the whole distribution story: no Apple Developer account, no
-TestFlight, no EAS build, no `ios/` directory.
+Open the iPhone camera, point it at the QR code in the terminal, tap the
+banner. Expo Go opens and the app loads over your LAN.
 
-**Three values must be filled in before anything will load.** They ship empty
-on purpose: a placeholder URL would send real requests to a domain nobody here
-owns, so the app instead says plainly on the sign-in screen that it is not
-configured. Either set them in the environment (they are inlined into the
-bundle at build time, so restart the bundler after changing them):
+The phone and the computer must be on the **same Wi-Fi**. If the QR code hangs
+on "Downloading JavaScript bundle", try `npx expo start --tunnel`.
+
+### The three values
+
+They ship **empty on purpose**. A placeholder hostname would send real auth
+tokens to a domain nobody here owns, so instead the sign-in screen says plainly
+that it is not configured.
 
 ```bash
+# mobile/.env
 EXPO_PUBLIC_API_BASE_URL=https://your-app.vercel.app
 EXPO_PUBLIC_SUPABASE_URL=https://<ref>.supabase.co
 EXPO_PUBLIC_SUPABASE_ANON_KEY=<the anon key>
 ```
 
-…or put them in `app.json` under `expo.extra` (`apiBaseUrl`, `supabaseUrl`,
-`supabaseAnonKey`). The anon key is designed to ship in clients — the web app
-already serves it to every browser — and row-level security in Postgres is what
-actually protects the data. The sign-in screen says so plainly when either is
-missing, rather than failing as a network error.
+- `EXPO_PUBLIC_API_BASE_URL` — your deployed Vercel URL. Expo Go runs on a real
+  phone, so `localhost` means *the phone*; this has to be a hostname the phone
+  can reach.
+- The two Supabase values **must be the same project** as the web app's
+  `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY`. The API
+  verifies the phone's token against that project, so a different one 401s
+  every request with a perfectly correct password.
+- The anon key is designed to ship in clients — the web app already serves it
+  to every browser — and row-level security in Postgres is the actual
+  protection. Never put a service-role key here.
 
-### Pointing it at a dev server on your LAN
+They can equally go in `app.json` under `expo.extra` (`apiBaseUrl`,
+`supabaseUrl`, `supabaseAnonKey`) if you would rather commit them. The env var
+wins where both are set.
 
-Expo Go runs on a real phone, so `localhost` is the phone. To develop against
-`npm run dev` on your laptop, open **You → Connection** and enter
-`http://192.168.x.x:3000`. It is stored in SecureStore and overrides the
-bundled URL, so the same scanned QR code works against either server with no
-rebuild. Plain HTTP to a LAN address works in Expo Go without an ATS exemption,
-and `newClientId()` in the shared outbox already has a fallback for
-`crypto.randomUUID` being absent outside a secure context — which is exactly
-this case.
+**Expo inlines `EXPO_PUBLIC_*` at bundle time — restart the bundler after
+editing `.env`.** A change does not reach a Metro process that is already
+running.
 
-The API needs `MOBILE_CORS_ORIGINS` set only for `npx expo start --web`; the
-native client is not CORS-constrained.
+### Against a dev server on your LAN
+
+No rebuild and no second QR code: open **You → Connection**, tap *Edit*, and
+enter `http://192.168.x.x:3000` (your laptop's LAN address, not `localhost`).
+It is stored in SecureStore on the device and overrides the bundled URL, and
+the card tells you whether that address is answering before you try to sign in.
+
+Plain HTTP to a LAN address works in Expo Go with no ATS exemption, and
+`newClientId()` in the shared outbox already falls back when
+`crypto.randomUUID` is unavailable outside a secure context — which is exactly
+this case, and is what keeps the offline queue minting valid ids over `http://`.
+
+Set `MOBILE_CORS_ORIGINS=http://localhost:8081` on the API **only** if you also
+want `npx expo start --web`. The native client is not CORS-constrained.
+
+### Signing in
+
+Email and password, on the sign-in screen that opens first. Deliberately not a
+magic link: a link means leaving the app, registering a URL scheme and handling
+a cold-start deep link, and the web app already has password auth.
+
+- **Existing account** — the same email and password you use on the web app.
+- **New account** — *No account yet? Create one →*. If your Supabase project
+  has email confirmation switched on, you get "Check your email to confirm the
+  account, then sign in"; confirm in the browser, come back, sign in. The
+  `profiles` row is created on that first real sign-in.
+- **Forgotten password** — reset it in the browser app. It needs an emailed
+  link, which only works on the web.
+
+If sign-in fails, read the **CONNECTION** card at the bottom of the same
+screen. A wrong API base URL and a wrong password look identical from the
+outside, and on a first run the URL is much the likelier of the two. `NOT
+SIGNED IN` there means the server is reachable and answering correctly.
 
 ### Scripts
 
@@ -62,13 +110,89 @@ native client is not CORS-constrained.
 |---|---|
 | `npm start` | the dev server and QR code |
 | `npm run ios` / `android` / `web` | start on a given target |
-| `npm run typecheck` | `tsc --noEmit` (needs the root `npm install`) |
-| `npm test` | vitest, pure logic only |
+| `npm run typecheck` | `tsc --noEmit` (needs the root `npm install` first) |
+| `npm test` | vitest — 320 tests, pure logic only |
 | `npm run bundle` | `expo export --platform ios` — the real build gate |
 
-There is a diagnostic route at **`/shared-smoke`** (not linked from the UI). It
-renders values computed by `src/lib/domain/*` across the project boundary. If
-those numbers are right, the shared domain layer is live in Expo Go.
+There is a diagnostic route at **`/shared-smoke`**, not linked from any screen.
+It renders values computed by `src/lib/domain/*` across the project boundary.
+If those numbers are right, the shared domain layer is live in Expo Go. Reach
+it by appending `/shared-smoke` to the URL in Expo Go's developer menu, or from
+`/_sitemap`.
+
+---
+
+## What works, and what does not
+
+### Works
+
+- **Logging a set mid-workout** — the flow this client exists for. One tap on
+  the hero button writes the set it is labelled with (`LOG 185 × 5`),
+  pre-filled from the last set of this session, then today's `lastSets`, then
+  the server's suggestion. One increment heavier and log is two taps; an
+  arbitrary weight is six. Swipe between exercises. Nothing waits on the
+  network: the pill is drawn on the same frame as the tap.
+- **Offline writes** — sets and session starts are queued in SQLite and
+  delivered in order in the background. A gym basement loses nothing. Each set
+  carries a client-minted `clientId` and the server upserts on
+  `(workout_id, client_id)`, so a retry after a lost response is not a
+  duplicate.
+- **Typed set entry** — `TYPE IT`, then "did 3 sets weighted pull ups 45lbs for
+  6 reps". It posts to the existing `/api/sets/parse` (deterministic shorthand
+  parser first, model second, then fuzzy exercise matching) and shows one
+  editable row per set before anything is written. A fuzzy match is flagged;
+  correcting it teaches an alias, so it is free next time.
+- **Spoken set entry** — the same flow with a microphone. Records with
+  `expo-audio`, uploads to `/api/voice/transcribe`, and feeds the transcript
+  into the same parse path and the same confirmation sheet. Needs
+  `OPENAI_TRANSCRIBE_MODEL` set on the server (below).
+- **Today, Runs, Food, You, Coach, and a per-exercise history screen** — ports
+  of the web pages, reading one cached `GET /api/mobile/bootstrap` payload with
+  every figure computed by the shared domain layer.
+- **Meal capture** — camera, library or a typed sentence; macros estimated,
+  then reviewed and edited before saving. The photo exists only in memory and
+  the two temporary files the picker and the resizer write are deleted
+  immediately.
+
+### Does not, and will not here
+
+- **HealthKit / step counts.** See below — out of scope, nothing installed.
+- **Speech recognition on the device.** It is a native module. Transcription is
+  server-side instead.
+- **Push notifications**, including a rest-timer alarm. A backgrounded Expo Go
+  app will not fire one reliably, and a timer that lies is worse than a bar you
+  have to look at. The rest timer runs off an absolute deadline, so coming back
+  from a pocket shows the truth.
+
+### Stubbed, degraded or deliberately missing
+
+- **Setting a calorie target.** No `POST /api/targets` route exists in the API —
+  the web app writes that row directly from a server component. The You screen
+  shows the cut / maintain / lean-bulk chips with the kcal and lb-per-week each
+  implies, and then says to set it on the laptop. It is the one place the
+  native app sends you elsewhere.
+- **The mic with no `OPENAI_TRANSCRIBE_MODEL`.** `/api/voice/transcribe`
+  answers 503 and the button reads "Speaking isn't set up yet — type it
+  instead". Typed entry is unaffected. Set the variable in the API's
+  environment (see the root `.env.example`) and run `npm run llm:preflight` at
+  the repo root to check the id against the models your key can see.
+- **Last weigh-in on the You screen.** `bootstrap` carries no last reading, only
+  the TDEE regression's *fitted* weight, which needs eight weigh-ins to exist.
+  The screen labels it as trend weight rather than calling a regression output a
+  reading, and shows nothing at all below that floor.
+- **A cold launch with no signal has no data.** The react-query cache is not
+  persisted and nothing yet writes the `bootstrap` payload into SQLite, so the
+  first launch of the day in a basement has no catalogue, no `lastSets` and no
+  gyms — the set pre-fill falls back to asking for a weight. A session already
+  open before signal was lost is unaffected.
+- **Weekly running verdicts** on the Runs screen are computed mileage and pace,
+  not the written summaries the Sunday cron stores. Those are not in
+  `bootstrap`.
+- **Ending a session with sets still queued.** `POST /api/sets` resolves the
+  workout server-side, so a set delivered after the session is closed is
+  rejected and dropped. The stop sheet warns with the count and offers
+  *SYNC, THEN END*; a dropped set still surfaces afterwards as a tappable line
+  with a real retry. The proper fix is server-side and is not done.
 
 ---
 
@@ -81,22 +205,22 @@ React 19.3.0), which was the published release when it was built.
 Every native-bearing version here is copied from `expo@58.0.19`'s own
 `bundledNativeModules.json`. A reanimated, screens or gesture-handler version
 outside the SDK's pin is the single most common cause of a red error screen, so
-do not "upgrade" any of them individually.
+do not "upgrade" any of them individually — use `npx expo install --fix`.
 
-**The dependency list is closed.** Only packages that work inside Expo Go are
-allowed: modules shipped in the Expo SDK, pure-JavaScript libraries, and the
-handful of third-party natives bundled into Expo Go because the default SDK 58
-template depends on them. Anything requiring `expo prebuild`, a config plugin
-with native code, or a custom dev client is out — one such package and scanning
-the QR code produces a red screen instead of an app. Notably excluded, and
-deliberately: `react-native-health`, `@kingstinct/react-native-healthkit`,
+**The dependency list is closed.** Only packages that work inside Expo Go:
+modules shipped in the Expo SDK, pure-JavaScript libraries, and the handful of
+third-party natives bundled into Expo Go because the default SDK 58 template
+depends on them. Anything needing `expo prebuild`, a config plugin with native
+code, or a custom dev client is out — one such package and scanning the QR code
+produces a red screen instead of an app. Notably excluded, deliberately:
+`react-native-health`, `@kingstinct/react-native-healthkit`,
 `@react-native-voice/voice`, `react-native-mmkv`,
 `react-native-keyboard-controller`.
 
-When Expo Go updates to SDK 59, this app will stop loading with "incompatible
+When Expo Go updates to SDK 59 this app will stop loading with "incompatible
 version" until `expo` is bumped and `npx expo install --fix` is run. That is
-unfixable in principle — it is the price of installing from the App Store rather
-than building — so it is written down rather than hidden.
+unfixable in principle — it is the price of installing from the App Store
+rather than building — so it is written down rather than hidden.
 
 ---
 
@@ -111,60 +235,85 @@ than building — so it is written down rather than hidden.
 This is deliberate. The root needs `react@19.0.0` for Next 15; React Native
 0.88 requires `react@^19.3.0`. Workspaces hoist, and a single hoisted React
 means Metro bundles a React that does not match the renderer it was built
-against — "Invalid hook call", on a device, with no debugger. Two isolated trees
-make that impossible. The cost is running `npm install` twice.
+against — "Invalid hook call", on a device, with no debugger. Two isolated
+trees make that impossible. The cost is running `npm install` twice.
 
-`metro.config.js` locks resolution to `mobile/node_modules`
-(`nodeModulesPaths` + `disableHierarchicalLookup`) so Metro cannot climb to the
-repo root and find the wrong React even by accident. Both lines are required.
+`metro.config.js` pins `nodeModulesPaths` to `mobile/node_modules` and adds a
+`blockList` entry making `<repo>/node_modules/` unresolvable from here, so
+Metro cannot climb to the repo root and find the wrong React even by accident.
+
+It deliberately does **not** set `resolver.disableHierarchicalLookup`, which is
+the obvious choice and is wrong: that flag also stops Metro walking into the
+*nested* `node_modules` inside this project, and
+`react-native-reanimated/node_modules/semver` has to stay reachable because the
+hoisted `semver` is version 6 and has no `functions/satisfies` subpath. With it
+on, `expo export` fails outright. The comment in `metro.config.js` says this
+too, because the obvious fix here is the wrong one.
 
 ### Sharing code with the web app
 
 The domain layer (`src/lib/domain/*` — units, e1RM, progression, muscles, TDEE,
 readiness, running) and the outbox queue (`src/lib/outbox/queue.ts`) are pure
-TypeScript with no I/O and have test coverage in the root suite. The native app
+TypeScript with no I/O and are covered by the root test suite. The native app
 **imports them**. It does not reimplement, copy or vendor them: two clients
 computing the same number two ways is how they come to disagree about it.
 
 Mechanically: `metro.config.js` adds `../src/lib` to `watchFolders`, and
-`mobile/lib/shared/` holds one one-line re-export barrel per module. Those eight
-files are the only ones in `mobile/` containing a `../../../` path; everything
-else imports `@/lib/shared/units` and friends.
+`mobile/lib/shared/` holds one one-line re-export barrel per module. Those
+eight files are the only ones in `mobile/` containing a `../../../` path;
+everything else imports `@/lib/shared/units` and friends.
 
 For **typechecking** only, `tsconfig.json` maps `@/db/schema` to
 `../src/db/schema.ts`, because three domain files carry a type-only
 `import type { Muscle } from "@/db/schema"`. Babel's TypeScript transform
-elides that before Metro ever sees it, so `drizzle-orm` is never pulled into the
-bundle — but `tsc` does need to resolve it, which is **why the root
-`npm install` must have been run before `npm run typecheck` here.**
+elides that before Metro sees it, so `drizzle-orm` never reaches the bundle —
+but `tsc` does have to resolve it, which is **why the root `npm install` must
+have run before `npm run typecheck` here.**
 
 ### Writes go through the outbox, reads through react-query
 
-Every write — a set, a session start — is queued in SQLite
-(`expo-sqlite`) and delivered in the background. A save never waits on a
-network that, in the room where this app is used, is usually not there. The
-delivery rules (strictly in order, stop at the first failure, only retry what
-retrying can fix) are the shared `flush()` from `src/lib/outbox/queue.ts`; this
-app adds a storage adapter, not a second queue.
+Every write — a set, a session start — is queued in SQLite (`expo-sqlite`) and
+delivered in the background. A save never waits on a network that, in the room
+where this app is used, is usually not there. The delivery rules (strictly in
+order, stop at the first failure, retry only what retrying can fix) are the
+shared `flush()` from `src/lib/outbox/queue.ts`; this app adds a storage
+adapter, not a second queue.
 
-Reads use `@tanstack/react-query`. The query cache is **not** persisted —
-offline reads come from the one fat `GET /api/mobile/bootstrap` payload, which
-is deliberately a single request so the phone has everything it needs after one
-chance at the network on the way into a basement.
+Reads use `@tanstack/react-query`. The query cache is **not** persisted — see
+the cold-launch note above. `lib/query.ts` bridges React Native's `AppState` to
+react-query's focus manager, because `refetchOnWindowFocus` otherwise waits for
+a DOM `visibilitychange` event that never arrives on a phone.
+
+Meals are the one write that does **not** go through the outbox, and should not:
+the review step is the only reason the macros are trustworthy, and a queued
+photo could not be reviewed before it was written.
 
 ### Authentication
 
 Supabase email/password on the device; the access token goes to the Next.js API
 as `Authorization: Bearer <jwt>`. A native client has no cookies, so the
-cookie-based `createServerClient` path the web app uses would resolve nobody and
-every screen would render empty. Server-side the token is verified by Supabase
-rather than decoded locally, and the resolved user id still flows through
-`withUser()` — row-level security is unchanged.
+cookie-based `createServerClient` path the web app uses would resolve nobody
+and every screen would render empty. Server-side the token is verified by
+Supabase rather than decoded locally, and the resolved user id still flows
+through `withUser()` — row-level security is unchanged.
 
 The session is persisted in `expo-secure-store` through a **chunking adapter**.
-SecureStore warns above 2048 bytes per value and a Supabase session JSON is past
-that; a naive adapter appears to work and then silently loses the session on
-next launch. See `lib/chunked-store.ts` and its tests.
+SecureStore warns above 2048 bytes per value and a Supabase session JSON is
+past that; a naive adapter appears to work and then silently loses the session
+on next launch. See `lib/chunked-store.ts` and its tests.
+
+### Layout
+
+```
+app/          expo-router routes. Thin: each one re-exports a feature screen.
+components/ui the design system — 12 components + tokens, ported from
+              src/app/globals.css and src/components/ui.tsx, not redesigned.
+features/     one folder per screen. Each keeps its decisions in a pure
+              model.ts / logic.ts with no react-native import, which is what
+              makes them unit-testable with no simulator.
+lib/          api client, auth, config, outbox adapter, haptics, query client.
+lib/shared/   one-line barrels re-exporting ../../../src/lib/domain/*.
+```
 
 ---
 
@@ -173,8 +322,8 @@ next launch. See `lib/chunked-store.ts` and its tests.
 Not attempted, no library installed. HealthKit requires a native module and
 cannot work in Expo Go under any configuration — installing
 `react-native-health` or `@kingstinct/react-native-healthkit` would make the QR
-code produce a red screen on launch, which is a strictly worse outcome than not
-having step counts.
+code produce a red screen on launch, which is strictly worse than not having
+step counts.
 
 Nothing is actually lost today: the **Health Auto Export** webhook already
 delivers steps, sleep and weight into `body_metrics` and keeps working
@@ -182,28 +331,33 @@ untouched.
 
 A future `eas build` dev client — which needs an Apple Developer account —
 would unlock direct HealthKit reads (steps, sleep, resting heart rate, workouts
-written back to Apple Health), a home-screen widget, background sync, and
-on-device speech recognition for voice set logging (which currently records with
-`expo-audio` and transcribes server-side instead).
+written back to Apple Health), remote push notifications and therefore a real
+rest alarm, a home-screen widget, background sync, and on-device speech
+recognition instead of a server round trip. **None of that is built.** It is
+listed so the next person knows what the Expo Go constraint is costing, not as
+a roadmap.
 
 ---
 
 ## What is verified, and what cannot be
 
 There is no simulator, no device and no Xcode in the environment this was built
-in. Four gates are run:
+in. These gates pass:
 
-- `npm run typecheck` in both projects
-- `npm test` in both projects
-- `npx expo export --platform ios` — proves Metro resolves every route, the
-  cross-boundary shared imports, and every native-module import
-- `npx expo start --web` — a rough visual check of pure-RN components
+- `npm run typecheck` in both projects — clean
+- `npm test` — 320 here, 272 at the repo root
+- `npx expo export --platform ios` — 1920 modules, a 5.2MB Hermes bundle, no
+  errors. This proves Metro resolves every route, the cross-boundary shared
+  imports and every native-module import.
+- `npx expo export --platform web` — also clean, and used with Playwright for a
+  rough visual check of the design system, the live-session screen, the number
+  pad, the sheets and the exercise detail screen.
 
 A successful Metro bundle catches version mismatch, unresolvable shared imports
 and bad native-module imports. It **cannot** catch a module that bundles fine
 but is absent from the Expo Go binary, which is why the closed dependency list
-is the real control rather than the build.
+above is the real control rather than the build.
 
 Nothing about **gestures, haptics, the keyboard, scroll feel, tap latency,
-audio recording or the camera** is verified. None of it can be exercised
-without a phone. The first real test of this app is the first QR scan.
+audio recording or the camera** is verified, and none of it can be without a
+phone. The first genuine test of this app is the first QR scan.

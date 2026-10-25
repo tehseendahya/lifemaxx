@@ -160,7 +160,16 @@ export async function enqueue(
     // and the server derives `rest_s` from the gap between consecutive
     // `loggedAt` values, so arrival time would put every rest gap in the
     // session in the wrong place.
-    payload: { ...payload, clientId: id, loggedAt: new Date().toISOString() },
+    // Preserved, not re-stamped: SessionScreen's RETRY re-enqueues a dropped
+    // item's original payload, and overwriting this would file the set at the
+    // retry time. The server derives rest_s from the gap between consecutive
+    // loggedAt values, so a set retried forty minutes later would record a
+    // forty-minute rest and sit in the wrong place in the session.
+    payload: {
+      ...payload,
+      clientId: id,
+      loggedAt: (payload.loggedAt as string | undefined) ?? new Date().toISOString(),
+    },
     createdAt: Date.now(),
     attempts: 0,
     nextAttemptAt: 0,
@@ -184,6 +193,18 @@ export function flushOutbox(): Promise<FlushResult> {
 
   inFlight = (async () => {
     try {
+      // Signed out: do not attempt at all. An attempt would post with no
+      // Authorization header, come back 401, and burn one of the item's eight
+      // attempts for a reason that has nothing to do with the item. Eight of
+      // those inside a few minutes and a basement's worth of sets is gone.
+      // Holding the queue costs nothing — it drains on the next flush after
+      // sign-in, and startOutbox() flushes every 30s regardless of session.
+      if ((await accessToken()) === null) {
+        const held = (await (await getStore()).all()).length;
+        publish({ pending: held, syncing: false });
+        return { sent: 0, dropped: [], remaining: held, blocked: true };
+      }
+
       const store = await getStore();
       const stale = await dropStaleStarts(store, Date.now());
       const result = await flush(store, send);

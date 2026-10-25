@@ -1,6 +1,6 @@
 import { db } from "@/db";
 import { exercises, exerciseAliases, exerciseMuscles } from "@/db/schema";
-import { and, eq, isNull, or, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
 
 /**
  * Exercise resolution.
@@ -82,8 +82,17 @@ export async function learnAlias(exerciseId: string, alias: string, userId: stri
 
 export async function musclesFor(exerciseIds: string[]) {
   if (exerciseIds.length === 0) return new Map<string, { muscle: string; contribution: number }[]>();
+  /*
+   * `inArray`, not sql`… = ANY(${ids})`.
+   *
+   * drizzle's sql template expands a JS array into a parameter *list*, so
+   * Postgres received `= ANY(($1, $2, …))` and errored with `op ANY/ALL
+   * (array) requires array on right side` (SQLSTATE 42809) — this function
+   * could never return a row. It had no caller until the native bootstrap
+   * route was written, which is why it had never fired.
+   */
   const rows = await db.select().from(exerciseMuscles)
-    .where(sql`${exerciseMuscles.exerciseId} = ANY(${exerciseIds})`);
+    .where(inArray(exerciseMuscles.exerciseId, exerciseIds));
   const map = new Map<string, { muscle: string; contribution: number }[]>();
   for (const r of rows) {
     const list = map.get(r.exerciseId) ?? [];

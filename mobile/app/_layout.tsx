@@ -6,7 +6,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { QueryClientProvider } from "@tanstack/react-query";
 
-import { queryClient } from "@/lib/query";
+import { queryClient, startFocusTracking } from "@/lib/query";
 import { loadApiBaseOverride } from "@/lib/config";
 import { setUnauthorizedHandler } from "@/lib/api";
 import { startOutbox } from "@/lib/outbox";
@@ -28,6 +28,10 @@ export default function RootLayout() {
 
   useEffect(() => {
     let stopOutbox: (() => void) | undefined;
+    // Bridges AppState to react-query's focus manager, which otherwise waits
+    // for a DOM event that never arrives. Started here, before the first
+    // query mounts, and torn down with everything else.
+    const stopFocus = startFocusTracking();
 
     void (async () => {
       await loadApiBaseOverride();
@@ -36,7 +40,10 @@ export default function RootLayout() {
       setBooted(true);
     })();
 
-    return () => stopOutbox?.();
+    return () => {
+      stopOutbox?.();
+      stopFocus();
+    };
   }, []);
 
   return (
@@ -106,7 +113,15 @@ function Gate() {
       <Stack.Screen name="runs" />
       <Stack.Screen name="exercise" />
       <Stack.Screen name="coach" options={{ presentation: "modal" }} />
-      <Stack.Screen name="exercise-picker" options={{ presentation: "modal" }} />
+      {/*
+        There is no `exercise-picker` route. The scaffold reserved one as a
+        modal, but both callers — the live session and the voice confirmation
+        sheet — render `ExercisePicker` inline inside their own overlay,
+        because the component takes `onPick`/`onCancel` callbacks and a route
+        cannot be handed a callback. A route rendering a placeholder that
+        nothing navigates to is worse than no route, so it was deleted at
+        integration.
+      */}
     </Stack>
   );
 }

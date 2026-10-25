@@ -4,3 +4,10 @@ dist/
 expo-env.d.ts
 *.tsbuildinfo
 .DS_Store
+
+# The three EXPO_PUBLIC_* values go here. `.env.example` is the template and is
+# committed; `.env` holds a real Supabase anon key and a real API hostname and
+# is not. The anon key is designed to ship in clients, but the hostname tells
+# anyone reading the repo where your deployment lives, so keep the file local.
+.env
+.env.local

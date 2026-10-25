@@ -244,7 +244,22 @@ export interface ResolvedExerciseDto {
   id: string;
   name: string;
   slug: string;
-  incrementLb: number;
+  /**
+   * Kilograms, unlike every other figure the phone receives.
+   *
+   * `/api/sets/parse` passes `resolveExercise()`'s row straight through and
+   * that row selects `exercises.incrementKg`, so this endpoint — alone among
+   * the ones the native client calls — does not convert at the edge the way
+   * `/api/mobile/*` does. It was declared here as `incrementLb` and was
+   * therefore always `undefined`; a stepper built on it would have moved the
+   * weight by `NaN`. Renamed rather than converted server-side, because the
+   * web app's `SetLogger.tsx` consumes this same response.
+   *
+   * Nothing reads it today: the voice confirmation sheet needs `id`, `name`
+   * and `confidence` only, and the weight stepper gets its increment from the
+   * catalogue in `bootstrap`, which is already in pounds.
+   */
+  incrementKg: number;
   equipment: string;
   /**
    * `"fuzzy"` means a trigram match, not an alias the user has confirmed. A

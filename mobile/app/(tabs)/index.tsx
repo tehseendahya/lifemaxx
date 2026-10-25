@@ -1,13 +1,6 @@
-import { Placeholder } from "@/lib/placeholder";
-// INTEGRATION: replace the import above with
-//   import TodayScreen from "@/features/today";
-// and the element below with <TodayScreen />.
-
-export default function Today() {
-  return (
-    <Placeholder
-      title="Today"
-      note="Fuel, train-next, the running week and measured maintenance. Owned by the today workstream."
-    />
-  );
-}
+/**
+ * The Today tab. The screen itself lives in `@/features/today`; this file is
+ * only the route, which is what keeps the navigation shell and the feature
+ * independently ownable.
+ */
+export { default } from "@/features/today";

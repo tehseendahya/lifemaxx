@@ -151,12 +151,28 @@ export async function apiGet<T>(path: string): Promise<T> {
   return request<T>(path, { method: "GET" });
 }
 
-export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
-  return request<T>(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+/**
+ * `timeoutMs` overrides the 15s default for the few routes that legitimately
+ * take longer. Meal analysis is the case it exists for: a vision-model call on
+ * a cold serverless start over cell data can plausibly exceed 15s, and when it
+ * does the user sees "The request timed out." on a photo that was being read
+ * perfectly well. The default stays short, because the common case is a small
+ * JSON write and a dead connection must not leave a spinner on screen.
+ */
+export async function apiPost<T>(
+  path: string,
+  body?: unknown,
+  timeoutMs?: number,
+): Promise<T> {
+  return request<T>(
+    path,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    },
+    timeoutMs,
+  );
 }
 
 export async function apiDelete<T>(path: string, body?: unknown): Promise<T> {
