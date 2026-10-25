@@ -40,7 +40,17 @@ export interface ResolvedExercise {
   slug: string;
   incrementKg: number;
   equipment: string;
-  confidence: "exact" | "fuzzy" | "none";
+  /**
+   * How the row was arrived at.
+   *
+   * `"new"` means it did not exist until this request created it. It is set by
+   * `parseSetsText`, not by anything in this file — resolution never creates —
+   * and it exists so the confirmation sheet can mark a row `+ Preacher Curl`
+   * with a NEW chip instead of presenting a just-invented exercise as though it
+   * had always been there. Widening this union rather than adding a parallel
+   * flag keeps one field answering one question for every consumer.
+   */
+  confidence: "exact" | "fuzzy" | "new" | "none";
 }
 
 /**
@@ -214,13 +224,19 @@ export async function resolveExerciseOutcome(
 }
 
 /**
- * The yes/no form, for the three callers that have no way to ask a question.
+ * The yes/no form, for callers that only need "do I already have this?".
  *
- * A near miss is `null` here, NOT the candidate: `parseSetsText` puts a null
- * into `unresolved`, which the phone draws as an unmatched chip the user can
- * fix — whereas returning the candidate would file the set against a lift the
- * user never did, which is the failure this whole file is written to avoid.
- * Callers that can ask should call `resolveExerciseOutcome` instead.
+ * `parseSetsText` used to be the main one and no longer is — it moved to
+ * `resolveExerciseOutcome` so it can create what it cannot find. What is left
+ * is `scripts/verify-db.ts`, which asserts that "benh pres" fuzzy-matches
+ * barbell-bench-press and that "bench" resolves exactly, and that is reason
+ * enough to keep: it is the narrow question, asked by something that cannot
+ * ask the user anything.
+ *
+ * A near miss is `null` here, NOT the candidate. Returning the candidate would
+ * file a set against a lift the user never did, which is the failure this whole
+ * file is written to avoid. Anything that can put a question in front of a
+ * person should call `resolveExerciseOutcome` instead.
  */
 export async function resolveExercise(
   query: string,
@@ -597,4 +613,36 @@ export async function createUserExercise(
   }
 
   return { ...exercise, muscles, musclesInferred: muscles.length > 0 };
+}
+
+/**
+ * Is there a lift NAME in here, or only numbers?
+ *
+ * The guard on every path that creates an exercise, and it has to be shared
+ * rather than copied because there are now two such paths: `POST
+ * /api/mobile/exercise/create`, where the user typed the name deliberately,
+ * and `parseSetsText`, which creates unknown exercises with no taps at all.
+ * The automatic path is the one that needs this more, since nobody is looking
+ * at the name before the row is written.
+ *
+ * Requiring "any letter" does not do the job, because `x` is a letter. Every
+ * realistic mis-parse would pass it: "225x5", "3x10", "5x5" and "100lb x 8"
+ * would all have been created as rows named "225x5" and "100lb X 8". That is
+ * not a corner case — `225x5` is the documented shape that reaches the
+ * unresolved path, because the shorthand parser needs a name before the first
+ * number, so it is precisely the text that arrives here. The set notation is
+ * removed first and a letter has to survive it.
+ */
+export function hasNameBeyondSetNotation(text: string): boolean {
+  const stripped = text
+    // "100lb" -> "100", so the pair below sees it as a number.
+    .replace(/(\d+(?:\.\d+)?)\s*(?:lbs?|kgs?)\b/gi, "$1")
+    // The weight x reps pair, which is what a mis-parsed set looks like.
+    .replace(/\d+(?:\.\d+)?\s*[x\u00d7]\s*\d+(?:\.\d+)?/gi, " ")
+    // Any number left over, including a bare rep count.
+    .replace(/\d+(?:\.\d+)?/g, " ")
+    // A separator left standing alone once its numbers are gone. Bounded by
+    // whitespace or the ends, so the x inside "Hex" is untouched.
+    .replace(/(^|\s)[x\u00d7](?=\s|$)/gi, " ");
+  return /\p{L}/u.test(stripped);
 }

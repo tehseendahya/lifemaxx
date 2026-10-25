@@ -37,13 +37,27 @@ vi.mock("@/lib/queries", () => ({
   localDate: () => "2026-10-25",
 }));
 
-vi.mock("@/lib/exercises", () => ({ resolveExercise: vi.fn() }));
+/*
+ * The parse path resolves and, for an unknown name, CREATES. This route's
+ * tests care about the transcript and the response shape, not about creation,
+ * so resolution is stubbed to a match and `createUserExercise` is present but
+ * never reached. `hasNameBeyondSetNotation` is real: it is a pure guard and a
+ * stub of it would change which branch the parse path takes.
+ */
+vi.mock("@/lib/exercises", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/exercises")>("@/lib/exercises");
+  return {
+    hasNameBeyondSetNotation: actual.hasNameBeyondSetNotation,
+    resolveExerciseOutcome: vi.fn(),
+    createUserExercise: vi.fn(),
+  };
+});
 
 process.env.LLM_PROVIDER = "fixtures";
 
 const { POST } = await import("./route");
 const { setTranscriber } = await import("@/lib/llm/transcribe");
-const { resolveExercise } = await import("@/lib/exercises");
+const { resolveExerciseOutcome, createUserExercise } = await import("@/lib/exercises");
 
 const BENCH: ResolvedExercise = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -89,8 +103,9 @@ beforeEach(() => {
   currentUser = "user-1";
   models.transcribe = "test-transcribe-model";
   setTranscriber(stubTranscriber("bench 5x5 185"));
-  vi.mocked(resolveExercise).mockReset();
-  vi.mocked(resolveExercise).mockResolvedValue(BENCH);
+  vi.mocked(resolveExerciseOutcome).mockReset();
+  vi.mocked(resolveExerciseOutcome).mockResolvedValue({ kind: "match", exercise: BENCH });
+  vi.mocked(createUserExercise).mockReset();
 });
 
 afterAll(() => setTranscriber(null));
@@ -211,7 +226,14 @@ describe("the happy path", () => {
   });
 
   it("reports an unresolved exercise rather than guessing, and still 200s", async () => {
-    vi.mocked(resolveExercise).mockResolvedValue(null);
+    /*
+     * An unknown name is now CREATED rather than reported, so the way an entry
+     * still arrives unresolved is a creation that failed. The route's job is
+     * unchanged and is what this pins: 200, the query named in `unresolved`,
+     * and the sets kept.
+     */
+    vi.mocked(resolveExerciseOutcome).mockResolvedValue({ kind: "new" });
+    vi.mocked(createUserExercise).mockRejectedValue(new Error("no free slug"));
     setTranscriber(stubTranscriber("zercher thrusters 95x8"));
 
     const res = await POST(upload({ audio: audioFile(45_000) }));

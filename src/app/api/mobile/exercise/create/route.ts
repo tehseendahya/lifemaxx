@@ -3,6 +3,7 @@ import { preflight } from "@/lib/auth/cors";
 import { displayLb } from "@/lib/domain/units";
 import {
   createUserExercise,
+  hasNameBeyondSetNotation,
   musclesFor,
   resolveExerciseOutcome,
   MAX_EXERCISE_NAME,
@@ -43,28 +44,6 @@ import {
  * answer rather than a queued write. Sets logged against it afterwards go
  * through the outbox as usual.
  */
-
-/**
- * Does anything survive once the set notation is taken out?
- *
- * Deliberately narrow: it strips weight-and-rep shapes, not letters in
- * general, so lifts whose real names carry numbers or an x keep working —
- * "21s", "5x5 bench", "Hex Bar Deadlift", "T-Bar Row" all still pass. Only
- * text that is *nothing but* numbers, units and separators is refused.
- */
-function hasNameBeyondSetNotation(text: string): boolean {
-  const stripped = text
-    // "100lb" -> "100", so the pair below sees it as a number.
-    .replace(/(\d+(?:\.\d+)?)\s*(?:lbs?|kgs?)\b/gi, "$1")
-    // The weight x reps pair, which is what a mis-parsed set looks like.
-    .replace(/\d+(?:\.\d+)?\s*[x×]\s*\d+(?:\.\d+)?/gi, " ")
-    // Any number left over, including a bare rep count.
-    .replace(/\d+(?:\.\d+)?/g, " ")
-    // A separator left standing alone once its numbers are gone. Bounded by
-    // whitespace or the ends, so the x inside "Hex" is untouched.
-    .replace(/(^|\s)[x×](?=\s|$)/gi, " ");
-  return /\p{L}/u.test(stripped);
-}
 
 interface Body {
   /** Exactly what the user typed. Learned as an alias, whatever it looks like. */

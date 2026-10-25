@@ -40,6 +40,10 @@ vi.mock("@/lib/exercises", async () => {
   const actual = await vi.importActual<typeof import("@/lib/exercises")>("@/lib/exercises");
   return {
     MAX_EXERCISE_NAME: actual.MAX_EXERCISE_NAME,
+    // Real, not a stub. It is the guard that refuses to create a row called
+    // "225x5", two tests below pin exactly that, and it now lives beside
+    // `createUserExercise` so the automatic parse path shares one copy.
+    hasNameBeyondSetNotation: actual.hasNameBeyondSetNotation,
     resolveExerciseOutcome: vi.fn(),
     createUserExercise: vi.fn(),
     musclesFor: vi.fn(),

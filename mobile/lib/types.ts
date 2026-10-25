@@ -308,8 +308,14 @@ export interface ResolvedExerciseDto {
    * `"fuzzy"` means a trigram match, not an alias the user has confirmed. A
    * wrong fuzzy match corrupts trend history silently, so the UI must always
    * show it and let the user re-file the row.
+   *
+   * `"new"` means `parseSetsText` CREATED this row for a name that resolved to
+   * nothing — the owner's "preacher curls", which used to come back unmatched
+   * with no way forward. The sets log against it with no taps; the sheet marks
+   * it `+ Name` with a NEW chip so a just-invented exercise is not presented
+   * as one that had always been there.
    */
-  confidence: "exact" | "fuzzy";
+  confidence: "exact" | "fuzzy" | "new";
 }
 
 export interface ParsedEntry {
@@ -317,6 +323,26 @@ export interface ParsedEntry {
   query: string;
   exercise: ResolvedExerciseDto | null;
   sets: ParsedSet[];
+  /**
+   * Something that already existed and resembles `query` closely enough that
+   * this might be a typo for it.
+   *
+   * A QUESTION, never an answer: the sets are filed against `exercise` and log
+   * fine if it is ignored. Sent alongside a `"new"` exercise (the guard against
+   * "bnch pres" minting a second bench press) and on a `"fuzzy"` match, where
+   * the matcher's own choice is the likelier mistake.
+   *
+   * Optional because a server that predates it sends nothing, and an absent
+   * question must render as no question rather than as a crash.
+   */
+  nearMiss?: { id: string; name: string } | null;
+  /**
+   * Chunks that looked like sets but held numbers the parser refused to believe
+   * — "165" out of the owner's typo "165,5", which would otherwise have become
+   * a set of 165 reps at 165 lb. Surfaced in the sheet so the loss is visible
+   * rather than silent. Present only on the deterministic path.
+   */
+  dropped?: string[];
 }
 
 export interface ParseResponse {

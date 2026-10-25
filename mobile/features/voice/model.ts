@@ -129,41 +129,23 @@ export interface SetGroup {
 
 // --------------------------------------------------------------- the wire
 
-/**
- * What `/api/sets/parse` and `/api/voice/transcribe` may actually send, as
- * opposed to what `lib/types.ts` declares.
+/*
+ * There is no local wire type here any more.
  *
- * Three fields on the parse response are additive and owned by the
- * parser/catalogue workstream: `confidence: "new"` (widened from
- * `"exact" | "fuzzy"`), an entry-level `nearMiss`, and the parser's `dropped`.
- * `ResolvedExerciseDto.confidence` is deliberately *not* being widened in
- * `lib/types.ts` — a near miss never crosses the wire that type describes, and
- * eight features are coded against that file — so this reader widens the shape
- * locally instead, and treats every one of the three as optional.
+ * This file used to re-declare `ParsedEntry` with three fields widened —
+ * `confidence: "new"`, an entry-level `nearMiss`, and the parser's `dropped` —
+ * because `lib/types.ts` declared none of them and nothing on the server sent
+ * them. Both halves landed in the same round: `parseSetsText` now creates
+ * unknown exercises and sends all three, and `lib/types.ts` declares all three.
+ * Two descriptions of one payload is exactly how a client and a server drift,
+ * so the duplicate is gone and `ParsedEntry` is read directly.
  *
- * The consequence is the thing worth having: this sheet renders correctly
- * against a server that sends none of them. An absent `confidence: "new"` makes
- * every created exercise read as `"exact"`, which is how the sheet behaved
- * before, rather than making it crash.
+ * `nearMiss` and `dropped` stay OPTIONAL in that declaration, and that is the
+ * property worth keeping: this sheet still renders correctly against a server
+ * that sends neither. An absent `nearMiss` is no question rather than a crash,
+ * and an absent `confidence: "new"` reads as `"exact"` — which is how the
+ * sheet behaved before any of this existed.
  */
-interface WireEntry {
-  query: string;
-  exercise: {
-    id: string;
-    name: string;
-    equipment?: string | null;
-    confidence?: string | null;
-  } | null;
-  sets: {
-    reps: number;
-    weight_lb: number;
-    rpe: number | null;
-    to_failure: boolean;
-    is_warmup: boolean;
-  }[];
-  nearMiss?: { id: string; name: string } | null;
-  dropped?: string[] | null;
-}
 
 // --------------------------------------------------------------- building
 
@@ -181,10 +163,7 @@ interface WireEntry {
  * rendered "66.1 lb" are exactly where that came from.
  */
 export function rowsFromParse(parsed: Pick<ParseResponse, "entries">): LogRow[] {
-  // Assignment rather than a cast: `ParsedEntry` is structurally a `WireEntry`
-  // with the three additive fields absent, so TypeScript checks the overlap and
-  // only the optional extras are taken on trust.
-  const entries: WireEntry[] = parsed.entries;
+  const entries = parsed.entries;
   const rows: LogRow[] = [];
 
   entries.forEach((entry, e) => {

@@ -4,6 +4,7 @@ import {
   KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { useRouter } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
@@ -75,6 +76,10 @@ const styles = StyleSheet.create({
 
   error: { color: color.bad, fontSize: 13, lineHeight: 19, marginBottom: space.md },
 
+  /**
+   * `paddingBottom` is applied at the call site from `useSafeAreaInsets`, not
+   * here — see the comment there. Everything else about the row is static.
+   */
   composer: {
     flexDirection: "row",
     alignItems: "flex-end",
@@ -108,6 +113,7 @@ const styles = StyleSheet.create({
 
 export default function CoachScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const client = useQueryClient();
   // `ComponentRef` rather than `ScrollView`: in React Native 0.88 ScrollView is
   // a function component, so the class itself is not the instance type.
@@ -192,7 +198,19 @@ export default function CoachScreen() {
 
         {error !== null && <Text style={styles.error}>{error}</Text>}
 
-        <View style={styles.composer}>
+        {/*
+          * The bottom inset is this screen's to apply, and it was missing.
+          *
+          * `Screen scroll={false}` deliberately adds no bottom inset (see
+          * Screen.tsx) because the fixed variant is for screens that pin
+          * something themselves and need the full height to position against.
+          * A tab screen gets away with that: expo-router's tab bar carries
+          * `paddingBottom: insets.bottom` itself, so content above it is
+          * already clear of the home indicator. Coach is a root-stack MODAL —
+          * there is no tab bar underneath it — so the TextInput and the 56pt
+          * SEND button sat in the home-indicator strip.
+          */}
+        <View style={[styles.composer, { paddingBottom: insets.bottom }]}>
           <TextInput
             value={draft}
             onChangeText={setDraft}

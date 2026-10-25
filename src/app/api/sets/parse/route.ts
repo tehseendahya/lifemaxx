@@ -6,12 +6,17 @@ import { parseSetsText } from "@/lib/llm/parse-sets";
  * Shorthand parser first, model second.
  *
  * The three steps that used to live here — `parseShorthand`, then the model
- * with `SETS_SYSTEM`, then `resolveExercise` per entry inside `withUser` — now
- * live in `src/lib/llm/parse-sets.ts`, because the native client's free-text
- * and spoken entry paths need exactly the same work and exercise matching must
- * not have two implementations. The response shape is unchanged:
- * `src/components/SetLogger.tsx` in the web app reads `entries[].exercise.id`,
- * `entries[].exercise.name` and `unresolved` from it.
+ * with `SETS_SYSTEM`, then resolution per entry inside `withUser` — now live in
+ * `src/lib/llm/parse-sets.ts`, because the native client's free-text and spoken
+ * entry paths need exactly the same work and exercise matching must not have
+ * two implementations.
+ *
+ * The response shape is still what `src/components/SetLogger.tsx` in the web
+ * app reads — `entries[].exercise.id`, `entries[].exercise.name` and
+ * `unresolved` — and it gained three optional fields this round (`nearMiss`,
+ * `dropped`, and `"new"` as a `confidence`). SetLogger ignores all three and
+ * simply benefits: resolution now CREATES an exercise it cannot find, so the
+ * "Couldn't match: ..." alert fires for a great deal less.
  *
  * Scoping is manual because the fallback is a model call: it happens between
  * the parse and the database lookup, never inside a transaction.

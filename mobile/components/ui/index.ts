@@ -77,6 +77,17 @@ export { NumberPad } from "./NumberPad";
 export { Pill } from "./Pill";
 export { Screen } from "./Screen";
 export { Sheet } from "./Sheet";
+/**
+ * `Sheet`'s height cap, as a pure function of the window and the top inset.
+ *
+ * Exported because it is part of the contract rather than an implementation
+ * detail: a caller whose panel can exceed the cap has to make its scrolling
+ * child `flexShrink: 1` (NOT `flex: 1`), and anything laying out against the
+ * panel needs the same number the panel used. It was withheld from this barrel
+ * in the round that added it, only to avoid two workstreams editing this file
+ * at once.
+ */
+export { SHEET_MIN_HEIGHT, SHEET_TOP_GAP, sheetMaxHeight } from "./sheet-size";
 export { Spinner } from "./Spinner";
 export { Stat } from "./Stat";
 export { Toggle } from "./Toggle";

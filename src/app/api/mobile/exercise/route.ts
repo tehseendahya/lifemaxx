@@ -1,8 +1,8 @@
 import { route, HttpError } from "@/lib/api";
 import { preflight } from "@/lib/auth/cors";
 import { db } from "@/db";
-import { exercises } from "@/db/schema";
-import { and, eq, isNull, or } from "drizzle-orm";
+import { exercises, sets } from "@/db/schema";
+import { and, count, eq, isNull, or } from "drizzle-orm";
 import { getExerciseHistory } from "@/lib/queries";
 import { displayLb } from "@/lib/domain/units";
 import { bestE1rm } from "@/lib/domain/e1rm";
@@ -70,6 +70,74 @@ export const GET = route(async ({ userId, searchParams }) => {
     // screen and the number above it are then describing the same sessions.
     bestE1rmLb: peaks.length > 0 ? displayLb(Math.max(...peaks)) : null,
   };
+});
+
+/**
+ * Hand back an exercise that was created automatically and that nothing ended
+ * up pointing at.
+ *
+ * `parseSetsText` writes a row for every name it cannot resolve, so the
+ * confirmation sheet has an id to show a name and log a set against. Most of
+ * those are wanted. Some are not, and this is how they go away:
+ *
+ *   · the user deletes that group from the sheet,
+ *   · the user answers "did you mean Barbell Curl?" with yes, which re-files
+ *     the sets and leaves the just-created row unreferenced,
+ *   · the user discards the whole sheet.
+ *
+ * The client calls this fire-and-forget at all three sites and treats a failure
+ * as nothing, which is right: an unreferenced exercise is invisible in every
+ * screen that ranks by volume, and a failed clean-up is not news in the middle
+ * of logging a set. So the status codes below are for whoever reads the logs,
+ * not for the phone.
+ *
+ * ── THE TWO THINGS IT REFUSES ──────────────────────────────────────────────
+ *
+ * A CATALOGUE ROW. `user_id IS NULL` is the shared catalogue, readable by
+ * everyone and writable by nobody; `write_own_exercises` in drizzle/0001 would
+ * raise anyway, but refusing here names the reason instead of surfacing a
+ * policy violation.
+ *
+ * A ROW WITH SETS. `sets.exercise_id` is `ON DELETE RESTRICT`, so the database
+ * is the real guarantee and this check cannot be raced past — but the count
+ * runs first so the answer is a 409 that says why rather than a 500 from a
+ * foreign-key violation. This is the invariant that matters: however wrong the
+ * caller is, this route cannot take history with it.
+ *
+ * `exercise_muscles` and `exercise_aliases` both cascade, so the inferred
+ * muscles and the learned wording go with the row and no orphan is left to
+ * resolve a future query onto a deleted exercise.
+ *
+ * `?id=` rather than a body: a body on a DELETE is not reliably readable
+ * across proxies, and `route()` tolerates its absence.
+ */
+export const DELETE = route(async ({ userId, searchParams }) => {
+  const id = requireUuid(searchParams.get("id"), "id");
+
+  const [exercise] = await db.select({ id: exercises.id, userId: exercises.userId })
+    .from(exercises)
+    .where(and(
+      eq(exercises.id, id),
+      or(isNull(exercises.userId), eq(exercises.userId, userId)),
+    ))
+    .limit(1);
+
+  if (!exercise) throw new HttpError("Unknown exercise.", 404);
+  if (exercise.userId === null) {
+    throw new HttpError("A catalogue exercise cannot be deleted.", 409);
+  }
+
+  const [{ value: logged }] = await db.select({ value: count() })
+    .from(sets)
+    .where(eq(sets.exerciseId, id));
+
+  if (Number(logged) > 0) {
+    throw new HttpError("That exercise has sets logged against it.", 409);
+  }
+
+  await db.delete(exercises).where(and(eq(exercises.id, id), eq(exercises.userId, userId)));
+
+  return { ok: true as const };
 });
 
 export const OPTIONS = preflight;
