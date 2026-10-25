@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Card, Label, Button } from "./ui";
 import { enqueueSet, newClientId } from "@/lib/outbox";
 import { parseShorthand } from "@/lib/llm/shorthand";
+import { nearMissQuestions, type WireEntry } from "./near-miss";
 
 interface Baseline { action: string; weightLb: number; sets: number; reps: number; reason: string }
 interface Suggestion { weightLb: number; sets: number; reps: number; reason: string }
@@ -123,11 +124,42 @@ export function SetLogger({ catalogue, onLogged }: {
       if (!res.ok) throw new Error(String(res.status));
       const data = await res.json();
       unresolved = data.unresolved ?? [];
-      entries = (data.entries ?? [])
-        .filter((e: { exercise: unknown }) => e.exercise)
-        .map((e: { exercise: { id: string; name: string }; sets: ParsedSet[] }) => ({
-          exerciseId: e.exercise.id, exerciseName: e.exercise.name, sets: e.sets,
-        }));
+      const wire: WireEntry[] = (data.entries ?? []).filter((e: { exercise: unknown }) => e.exercise);
+
+      /*
+       * "Create automatically, but FLAG near-misses." The create half arrived
+       * with the parse route; this is the flag half, which the web was missing
+       * entirely — so "bnch pres" minted a second bench press with nothing
+       * shown, and split a year of history in two.
+       *
+       * Asked before anything is enqueued, because that is the last moment the
+       * answer is free: once the sets are in the outbox they are filed.
+       */
+      const refiled = new Map<number, { id: string; name: string }>();
+      for (const q of nearMissQuestions(wire)) {
+        if (!window.confirm(q.prompt)) continue;
+        refiled.set(q.index, q.suggestion);
+
+        // Teach the wording so the same text resolves exactly next time, and
+        // take back the row this parse created now that nothing points at it.
+        // Both are fire-and-forget: the re-file already applies locally, and
+        // neither failure is worth a message over a set being logged.
+        void fetch("/api/mobile/exercise/alias", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ exerciseId: q.suggestion.id, alias: q.query }),
+        }).catch(() => {});
+        if (q.createdId !== null) {
+          void fetch(`/api/mobile/exercise?id=${encodeURIComponent(q.createdId)}`, {
+            method: "DELETE",
+          }).catch(() => {});
+        }
+      }
+
+      entries = wire.map((e, i) => {
+        const target = refiled.get(i) ?? e.exercise!;
+        return { exerciseId: target.id, exerciseName: target.name, sets: e.sets as ParsedSet[] };
+      });
     } catch {
       const local = resolveLocally(parseShorthand(text), catalogue);
       entries = local.entries;

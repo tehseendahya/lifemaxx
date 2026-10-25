@@ -1,0 +1,45 @@
+{
+  "expo": {
+    "name": "lifemaxx",
+    "slug": "lifemaxx",
+    "version": "0.1.0",
+    "runtimeVersion": {
+      "policy": "sdkVersion"
+    },
+    "scheme": "lifemaxx",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0d1013",
+    "plugins": [
+      "expo-router"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "web": {
+      "output": "single"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Record a spoken set so it can be logged.",
+        "NSCameraUsageDescription": "Photograph a meal to estimate its macros. Photos are never stored.",
+        "NSPhotoLibraryUsageDescription": "Pick a meal photo. Photos are never stored."
+      }
+    },
+    "extra": {
+      "apiBaseUrl": "",
+      "supabaseUrl": "",
+      "supabaseAnonKey": "",
+      "router": {
+        "asyncRoutes": {
+          "web": true
+        }
+      },
+      "eas": {
+        "projectId": "74dacced-64fc-4a90-84c8-05e5650302e4"
+      }
+    },
+    "owner": "tehseendahya"
+  }
+}

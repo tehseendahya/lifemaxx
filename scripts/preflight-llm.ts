@@ -65,11 +65,20 @@ async function main() {
 
   for (const [route, model] of Object.entries(MODELS)) {
     if (!available) break;
+    // `transcribe` has no default and is null unless OPENAI_TRANSCRIBE_MODEL is
+    // set. That is a deployment choice, not a broken id — the voice route
+    // answers 503 and the typed path is unaffected — so it is reported rather
+    // than counted as a failure.
+    if (model === null) {
+      console.log(`  ${DIM}skip${OFF}  ${route} → not configured`);
+      continue;
+    }
     const ok = available.has(model);
     if (!ok) failures += 1;
     console.log(`  ${ok ? `${GREEN}ok${OFF}  ` : `${RED}MISSING${OFF} `} ${route} → ${model}`);
   }
-  if (available && [...new Set(Object.values(MODELS))].some((m) => !available!.has(m))) {
+  const configured = [...new Set(Object.values(MODELS))].filter((m): m is string => m !== null);
+  if (available && configured.some((m) => !available!.has(m))) {
     console.log(`\n  ${DIM}A missing id means lib/models.ts names a model this key cannot reach.`);
     console.log(`  Pick replacements from the list above and change that one file.${OFF}`);
   }

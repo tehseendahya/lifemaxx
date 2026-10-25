@@ -1,4 +1,5 @@
 import { currentUserId } from "@/lib/supabase/server";
+import { corsHeadersFor, preflight } from "@/lib/auth/cors";
 import { getLlm } from "@/lib/llm";
 import { MODELS } from "@/lib/models";
 import { sessionMessagesFor } from "@/lib/llm/context";
@@ -11,11 +12,16 @@ import { getActiveWorkout, getProfile, localDate } from "@/lib/queries";
  * and a spinner for four of them is the difference between using this and not.
  */
 export async function POST(req: Request) {
-  const userId = await currentUserId();
-  if (!userId) return new Response("Not signed in", { status: 401 });
+  const cors = corsHeadersFor(req);
+
+  // Cookies for the browser, a verified bearer token for the phone. The native
+  // client reads this stream with `expo/fetch`, since React Native's default
+  // XHR-backed fetch leaves `response.body` undefined.
+  const userId = await currentUserId(req);
+  if (!userId) return new Response("Not signed in", { status: 401, headers: cors });
 
   const { question } = (await req.json()) as { question?: string };
-  if (!question?.trim()) return new Response("Ask something.", { status: 400 });
+  if (!question?.trim()) return new Response("Ask something.", { status: 400, headers: cors });
 
   // Context assembly and the question's own row, in one scoped transaction.
   // The stream that follows deliberately runs outside it: holding a Postgres
@@ -35,7 +41,7 @@ export async function POST(req: Request) {
     return { workoutId: active.id, messages };
   });
 
-  if (!prepared) return new Response("No active session.", { status: 400 });
+  if (!prepared) return new Response("No active session.", { status: 400, headers: cors });
   const { workoutId, messages } = prepared;
 
   const encoder = new TextEncoder();
@@ -66,6 +72,8 @@ export async function POST(req: Request) {
   });
 
   return new Response(stream, {
-    headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+    headers: { ...cors, "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
   });
 }
+
+export const OPTIONS = preflight;

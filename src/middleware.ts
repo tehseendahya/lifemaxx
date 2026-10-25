@@ -7,6 +7,16 @@ import { NextResponse, type NextRequest } from "next/server";
  * expires, which is exactly the moment you're standing in a gym.
  */
 export async function middleware(request: NextRequest) {
+  // A bearer request has no cookies to refresh, and refreshing is a GoTrue
+  // round trip — so the native client would pay one on every single API call
+  // for nothing. Only requests that actually carry an Authorization header skip
+  // it; the web app never sends one, so its refresh behaviour is untouched.
+  //
+  // The matcher deliberately still covers /api: the PWA can sit on the Lift
+  // screen POSTing sets for an hour without a navigation, and that is exactly
+  // the session that must not be allowed to expire.
+  if (request.headers.has("authorization")) return NextResponse.next({ request });
+
   let response = NextResponse.next({ request });
 
   const supabase = createServerClient(

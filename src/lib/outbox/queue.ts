@@ -20,7 +20,15 @@
  *     rest of the session.
  */
 
-export type OutboxKind = "set";
+/**
+ * `session-start` exists because `POST /api/sets` resolves the workout
+ * server-side via `getActiveWorkout()` — the set payload carries no workout id.
+ * So the first set of the day in a basement has nowhere to land unless the
+ * start is queued ahead of it. Since this queue already delivers strictly in
+ * order and stops at the first failure, an ordered start-then-sets queue makes
+ * that work with no new server contract at all.
+ */
+export type OutboxKind = "set" | "session-start";
 
 export interface OutboxItem {
   /** Also the row's client_id, so a retry after a lost response is not a duplicate. */
@@ -64,6 +72,11 @@ export function classifyStatus(status: number): "ok" | "retry" | "permanent" {
   if (status >= 200 && status < 300) return "ok";
   // 408 and 429 are 4xx but explicitly mean "try again".
   if (status === 408 || status === 429) return "retry";
+  // 401 and 403 are about the credential, not the payload. The set is valid
+  // and will deliver once the session is refreshed, so dropping it would
+  // destroy good data over an expired token — the precise thing the outbox
+  // exists to prevent. Everything else in the 4xx range really is the payload.
+  if (status === 401 || status === 403) return "retry";
   if (status >= 400 && status < 500) return "permanent";
   return "retry";
 }

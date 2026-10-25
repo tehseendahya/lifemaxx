@@ -105,13 +105,42 @@ full-screen layout.
 
 ---
 
+## The native iOS client
+
+There is also a real iOS app in **[`mobile/`](mobile/README.md)** — an Expo
+project that runs in **Expo Go** off a scanned QR code. No Apple Developer
+account, no TestFlight, no `ios/` directory.
+
+It is the phone client, not a replacement: this Next.js app remains the backend
+and the laptop UI, and the two do not chase feature parity. The native client
+exists because logging a set mid-workout wants native scroll, gestures, haptics
+and a custom number pad, which a mobile web page cannot give you. It shares
+this repo's `src/lib/domain/*` and `src/lib/outbox/queue.ts` by importing them
+rather than copying them.
+
+```bash
+npm install          # here, first — mobile's typecheck needs it
+cd mobile && npm install
+cp .env.example .env # three values: API URL + the same Supabase project
+npx expo start
+```
+
+Two things on this side make it work, both additive: API routes now accept
+`Authorization: Bearer <jwt>` as well as the web app's cookies (cookie
+behaviour is byte-for-byte unchanged), and `OPENAI_TRANSCRIBE_MODEL` /
+`MOBILE_CORS_ORIGINS` are new optional variables — see `.env.example`.
+
+**[Full setup, what works and what is stubbed →](mobile/README.md)**
+
+---
+
 ## Commands
 
 | | |
 |---|---|
 | `npm run dev` | Development server |
 | `npm run build` | Production build |
-| `npm test` | Domain, parser, LLM-contract, outbox and export-parser tests (158, no network) |
+| `npm test` | Domain, parser, LLM-contract, auth, outbox and export-parser tests (272, no network) |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run db:migrate` | Apply `drizzle/*.sql` in order |
 | `npm run db:seed` | Load/refresh the exercise catalogue (idempotent) |

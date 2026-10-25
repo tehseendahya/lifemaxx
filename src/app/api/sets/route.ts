@@ -1,9 +1,10 @@
-import { route } from "@/lib/api";
+import { route, HttpError } from "@/lib/api";
 import { db } from "@/db";
 import { sets, workouts } from "@/db/schema";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { lbToKg } from "@/lib/domain/units";
 import { getActiveWorkout } from "@/lib/queries";
+import { SANITY, setWithinSanity } from "@/lib/llm/shorthand";
 
 interface Body {
   exerciseId: string;
@@ -25,6 +26,27 @@ interface Body {
 const MAX_REST_S = 3600;
 
 export const POST = route<Body>(async ({ userId, body }) => {
+  /*
+   * The bound lives here because this is the only place every client passes
+   * through — the web SetLogger, the phone's outbox, the confirmation sheet and
+   * the voice path all end up at this route. Before this, none of them was
+   * checked server-side: the deterministic parser enforced SANITY, and nothing
+   * else did, so a set of 165 reps at 165 lb was still writable by anything
+   * that skipped the parser (a model answer, a hand-rolled request, the web
+   * logger's own inputs). One bad row is not a cosmetic problem — Epley makes
+   * it a ~2000 lb e1RM that becomes the all-time peak and rescales the
+   * exercise's whole trend chart.
+   *
+   * 400 rather than a clamp: silently storing a different number than the one
+   * sent is how a logger loses trust, and every caller here has a human in
+   * front of it who can fix the figure.
+   */
+  if (!setWithinSanity(body.reps, body.weightLb)) {
+    throw new HttpError(
+      `A set must be ${SANITY.minReps}–${SANITY.maxReps} reps at 0–${SANITY.maxWeightLb} lb.`,
+    );
+  }
+
   const active = await getActiveWorkout(userId);
   if (!active) throw new Error("Start a session first.");
 
