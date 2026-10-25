@@ -1,13 +1,21 @@
 import { apiDelete, apiPost, apiUpload } from "@/lib/api";
-import type { ParseResponse, TranscribeResponse } from "@/lib/types";
+import { enqueue } from "@/lib/outbox";
+import type { CueResponse, CueWrite, ParseResponse, TranscribeResponse } from "@/lib/types";
+
+import { cueQueueId } from "./model";
 
 /**
- * The three calls this feature makes, and the reason none of them write a set.
+ * The calls this feature makes, and the reason none of them write a set.
  *
- * Parsing and resolution are reads. The write happens later, through
+ * Parsing and resolution are reads. The SET write happens later, through
  * `@/lib/outbox`, so a confirmed set survives a dead phone and a dead signal —
  * posting straight to `/api/sets` from here would lose the one thing the outbox
  * exists for at the one moment it matters.
+ *
+ * A cue is the one write that starts here, and it has two roads for the same
+ * reason: `saveCue` posts directly because its response is the authoritative
+ * normalised string, and `queueCue` puts it in the same outbox when there is no
+ * signal to answer with one.
  */
 
 /**
@@ -48,6 +56,70 @@ export function learnAlias(exerciseId: string, alias: string): Promise<{ ok: tru
  */
 export function deleteExercise(id: string): Promise<{ ok: true }> {
   return apiDelete<{ ok: true }>(`/api/mobile/exercise?id=${encodeURIComponent(id)}`);
+}
+
+/**
+ * Pin, replace or clear this lift's carry-forward cue.
+ *
+ * One verb for all three. `cue: ""` — or anything that is only whitespace —
+ * deletes the row and comes back as `cue: null`, because the absence of a row
+ * is the only representation of "no cue" the server has. So the text field's
+ * contents get sent whatever they are, and there is no DELETE to reach for.
+ *
+ * **Render the response's `cue`, never the string that was sent.** The server
+ * normalises — CRLF to LF, trailing spaces off each line, any run of blank
+ * lines down to a single one, the ends trimmed — so the two are not always
+ * equal, and
+ * painting the local draft would show something the next bootstrap disagrees
+ * with. `normaliseCue` in `model.ts` mirrors that rule for the LENGTH check
+ * only, so the phone measures what the server measures.
+ *
+ * Idempotent on (user, exercise), so a double-tapped save or a retry after a
+ * lost response lands on one row with the last write winning.
+ *
+ * ── ONLINE THIS IS THE WHOLE STORY; OFFLINE SEE `queueCue` ─────────────────
+ *
+ * This posts directly, because when there is signal the response is worth
+ * waiting for: it carries the cue as the server normalised it, which is the
+ * string the next bootstrap will send. Only when this fails for a reason
+ * retrying could fix does the caller fall back to `queueCue`.
+ */
+export function saveCue(exerciseId: string, cue: string): Promise<CueResponse> {
+  const body: CueWrite = { exerciseId, cue };
+  return apiPost<CueResponse>("/api/mobile/exercise/cue", body);
+}
+
+/**
+ * The same write, queued, for a cue typed where there is no signal.
+ *
+ * Every SET in this feature goes through `@/lib/outbox` so it survives a
+ * basement, and a cue is written on the same concrete — so it goes through the
+ * outbox too. `OutboxKind` gained a `"cue"` member for this; the comment on it
+ * in `src/lib/outbox/queue.ts` is where the reasoning about ordering lives,
+ * since that queue is strictly ordered and a new kind in it is not free.
+ *
+ * Two things make it safe rather than merely possible. The item id is
+ * `cueQueueId(exerciseId)`, so re-editing the same lift's cue replaces the
+ * queued write instead of stacking a second one behind it. And the route is an
+ * upsert on (user, exercise), so a replay after a response was lost on a dying
+ * bar of signal cannot produce a duplicate.
+ *
+ * The caller renders its own `normaliseCue(draft)` in this path, which is the
+ * one place the local draft is painted rather than the server's answer — there
+ * is no answer yet. That is sound only because the phone's `normaliseCue` is a
+ * byte-identical mirror of the server's, which
+ * `src/app/api/mobile/exercise/cue/route.db.test.ts` asserts as text so the two
+ * cannot drift apart unnoticed.
+ */
+export function queueCue(exerciseId: string, cue: string): Promise<string> {
+  const body: CueWrite = { exerciseId, cue };
+  return enqueue("cue", "/api/mobile/exercise/cue", {
+    ...body,
+    // `enqueue` takes the item id from `clientId`, which is how a second edit
+    // of this lift lands on the same row of the queue. The route ignores the
+    // field — it reads `exerciseId` and `cue` and nothing else.
+    clientId: cueQueueId(exerciseId),
+  });
 }
 
 /**

@@ -574,15 +574,19 @@ export const pillParts = (s: DisplaySet): PillParts => ({
 
 // ------------------------------------------------------------------- owed
 
-/** The muscles behind on volume, highest debt first. `ranked` already arrives sorted. */
+/**
+ * The muscles behind on volume, highest debt first. `ranked` already arrives
+ * sorted.
+ *
+ * `partitionByOwed` (the exercise picker's "Owed this week" section) is the
+ * caller. There used to be an `owedLine()` beside this that joined the top
+ * three labels with `·` for the Lift page's start screen; that card now reads
+ * from `features/lift/next.ts`, which shows a figure and a recency beside each
+ * muscle instead of a bare list of names, so the line had no caller left and is
+ * gone. The threshold cases it tested are asserted against this function now.
+ */
 export const owedMuscles = (ranked: RankedMuscle[]): RankedMuscle[] =>
   ranked.filter((m) => m.score > OWED_SCORE_THRESHOLD);
-
-export const owedLine = (ranked: RankedMuscle[], limit = 3): string =>
-  owedMuscles(ranked)
-    .slice(0, limit)
-    .map((m) => m.label)
-    .join(" · ");
 
 // ------------------------------------------------------------------ picker
 

@@ -19,6 +19,15 @@
  * fifteen identical cards is not something anyone can check before tapping
  * confirm.
  *
+ * One thing in the sheet is NOT a set and does not go through that queue: the
+ * per-exercise CUE. It is pinned to the lift on the server
+ * (`POST /api/mobile/exercise/cue`), read from `bootstrap.cues`, shown above
+ * that lift's sets every time it is logged, and saved the moment it is typed —
+ * so it is not gated on the confirm button and DISCARD does not take it back.
+ * It goes through the same outbox the sets do when there is no signal to save
+ * it directly, so a cue written in a basement is as durable as the sets around
+ * it. See `ConfirmSheet` and the `cues` section of `model.ts`.
+ *
  * The typed path is the primary one and depends on nothing new: `/api/sets/parse`
  * has been in production since before this project. The mic is additive — with
  * no `OPENAI_TRANSCRIBE_MODEL` configured, no microphone permission or no

@@ -1,39 +1,51 @@
 import { useCallback, useMemo, useState } from "react";
 import { Modal, StyleSheet, Text, View } from "react-native";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { Button, NumberPad, color, space } from "@/components/ui";
 import { ApiError } from "@/lib/api";
 import { tapDone, tapError, tapSave, tapSelect } from "@/lib/haptics";
 import { enqueue } from "@/lib/outbox";
+import { queryKeys } from "@/lib/query";
 import { ExercisePicker } from "@/features/lift";
-import type { CatalogueExercise, TranscribeResponse } from "@/lib/types";
+// The module, not `@/features/today`'s barrel. That barrel's default export IS
+// the Today screen, so importing the hook through it drags the whole dashboard
+// into this module graph for one `useQuery`. `SettingsScreen` reaches for the
+// same hook the same way, for the same reason.
+import { useBootstrap } from "@/features/today/useBootstrap";
+import type { Bootstrap, CatalogueExercise, ExerciseHistory, TranscribeResponse } from "@/lib/types";
 
 import { ConfirmSheet } from "./ConfirmSheet";
 import { GroupActions } from "./GroupActions";
 import { TextEntry } from "./TextEntry";
 import { TextPrompt } from "./TextPrompt";
 import { VoiceButton } from "./VoiceButton";
-import { deleteExercise, learnAlias, parseSets } from "./requests";
+import { deleteExercise, learnAlias, parseSets, queueCue, saveCue } from "./requests";
 import {
   PAD_META,
   aliasToLearn,
   blankRow,
   createdExerciseIds,
+  cueError,
+  cueFor,
   deleteGroup,
   deleteRow,
   duplicateRow,
   fieldToPad,
   groupRows,
   markFirstWarmups,
+  normaliseCue,
   padToPatch,
   patchGroup,
   patchRow,
   payloadsFor,
   refileEntry,
   rowsFromParse,
+  shouldQueueCue,
   type LogRow,
   type PadField,
   type RowPatch,
+  type SourceKind,
 } from "./model";
 
 const styles = StyleSheet.create({
@@ -45,8 +57,19 @@ const styles = StyleSheet.create({
 
 type Stage = "idle" | "typing" | "confirming";
 
-/** What a note being typed is attached to. */
-type NoteTarget = { kind: "row"; key: string } | { kind: "group"; entryKey: string };
+/**
+ * What the prose editor is attached to.
+ *
+ * Three targets, one `TextPrompt`, and the third is a different KIND of thing
+ * from the first two. A `row` or `group` note is local state that confirm
+ * writes with the sets; a `cue` is pinned to the exercise on the server and is
+ * saved the instant it is typed. They share the editor because they are both
+ * "type a sentence about this", and nothing else.
+ */
+type NoteTarget =
+  | { kind: "row"; key: string }
+  | { kind: "group"; entryKey: string }
+  | { kind: "cue"; exerciseId: string; exerciseName: string };
 
 /**
  * Type a set, check it, log it.
@@ -71,6 +94,12 @@ type NoteTarget = { kind: "row"; key: string } | { kind: "group"; entryKey: stri
  * edited, and threading that through a parent is how two of them end up
  * disagreeing. They are siblings rather than nested because each is its own
  * `Modal`: the later one draws over the sheet and the sheet does not move.
+ *
+ * The note editor is also the CUE editor — a lift's carry-forward cue, pinned
+ * on the server and shown above that lift's sets every time. It is the one
+ * write in this component that does not go through the outbox and is not gated
+ * on confirm; `persistCue` below says why, and the two meanings are kept apart
+ * by the editor's own copy rather than by a second screen.
  */
 export function QuickLog({
   exerciseId,
@@ -100,7 +129,7 @@ export function QuickLog({
   const [stage, setStage] = useState<Stage>("idle");
   const [rows, setRows] = useState<LogRow[]>([]);
   const [sourceText, setSourceText] = useState("");
-  const [sourceLabel, setSourceLabel] = useState("TYPED");
+  const [sourceKind, setSourceKind] = useState<SourceKind>("typed");
   const [usedModel, setUsedModel] = useState(false);
 
   const [busy, setBusy] = useState(false);
@@ -116,6 +145,9 @@ export function QuickLog({
   /** Which group's bulk-action sheet is open, by `entryKey`. */
   const [bulkFor, setBulkFor] = useState<string | null>(null);
   const [noting, setNoting] = useState<NoteTarget | null>(null);
+  /** True while a cue is in flight; `cueProblem` is why the last one failed. */
+  const [savingCue, setSavingCue] = useState(false);
+  const [cueProblem, setCueProblem] = useState<string | null>(null);
 
   /**
    * Where CANCEL goes from the text screen.
@@ -129,6 +161,129 @@ export function QuickLog({
   const groups = useMemo(() => groupRows(rows), [rows]);
   const bulkGroup = groups.find((group) => group.entryKey === bulkFor) ?? null;
 
+  /**
+   * The carry-forward cues, read off the payload every host screen already
+   * loaded.
+   *
+   * `useBootstrap` rather than a request of this feature's own, and that is
+   * the whole reason the cues ship in `bootstrap` at all: both screens that
+   * mount this — the lift start screen and the session screen — are already
+   * holding that payload, react-query dedupes by key, so a cue is on screen in
+   * a basement with no round trip of any kind. Nothing here fetches.
+   */
+  const client = useQueryClient();
+  const { data: bootstrap } = useBootstrap();
+  const cues = bootstrap?.cues;
+
+  /**
+   * Write one cue, and tell every screen that reads cues.
+   *
+   * Three things are deliberate.
+   *
+   * It is NOT gated on confirm and NOT undone by DISCARD. A cue is a fact
+   * about the exercise; the sets in the sheet are a separate decision, and
+   * taking a cue back because a parse was discarded would be the app
+   * overruling something the owner did on purpose.
+   *
+   * The RESPONSE's cue is what lands in the cache, never the local draft. The
+   * server trims the ends, normalises CRLF, strips trailing spaces per line
+   * and collapses runs of blank lines, so the two strings are not always
+   * equal — and the one the database holds is the one the next bootstrap will
+   * send. A cleared cue is DELETED from the map rather than stored as `""`,
+   * because absence is the only representation of "no cue" the server has and
+   * a second one would need every consumer to know about it.
+   *
+   * A failure that retrying could fix QUEUES rather than stopping. A cue is
+   * typed on the same concrete the sets are, and a sentence the owner wrote
+   * about their own lifting is not worth less than a set — so a dead signal
+   * sends it to the outbox, the editor closes, and the cue is on screen
+   * immediately. Only a refusal the server will repeat (too long, or a lift it
+   * cannot see) keeps the editor open with the draft still in it, because that
+   * is the one the owner has to change something to fix.
+   *
+   * In the queued path alone, the cache gets the LOCALLY normalised draft:
+   * there is no response to take the authoritative string from. That is sound
+   * because `normaliseCue` here is a byte-identical mirror of the server's and
+   * a test asserts it as text, so the string painted now is the string the next
+   * bootstrap will send.
+   */
+  const persistCue = useCallback(async (exerciseId: string, draft: string) => {
+    setSavingCue(true);
+    setCueProblem(null);
+
+    /** Put one cue into every cache that holds cues. `null` clears it. */
+    const patch = (cue: string | null) => {
+      client.setQueryData<Bootstrap>(queryKeys.bootstrap, (current) => {
+        if (current === undefined) return current;
+        const next = { ...(current.cues ?? {}) };
+        if (cue === null) delete next[exerciseId];
+        else next[exerciseId] = cue;
+        return { ...current, cues: next };
+      });
+      /*
+       * The exercise detail screen edits the same cue and holds its own copy
+       * of it from `GET /api/mobile/exercise`. Patching one cache and leaving
+       * the other is how the two screens come to disagree.
+       *
+       * WRITTEN, not invalidated, and that distinction is the whole bug this
+       * replaced. Invalidating asks the server for the truth, which is correct
+       * online and exactly wrong in the queued branch below: offline there IS
+       * no server copy yet, the outbox has not flushed, and `mobile/lib/outbox.ts`
+       * invalidates nothing after it does. So the refetch returned the PRE-EDIT
+       * cue, React Query cached it as fresh, and the detail screen showed
+       * superseded text — or no cue at all, if this was the first one — until
+       * the app was relaunched. Offline is the case `queueCue` exists for.
+       *
+       * Writing is right in both branches: online the server has already
+       * answered and `saved.cue` is that answer, so a refetch would only cost a
+       * request to be told what we know.
+       */
+      client.setQueryData<ExerciseHistory>(queryKeys.exercise(exerciseId), (current) =>
+        current === undefined ? current : { ...current, cue },
+      );
+    };
+
+    try {
+      const saved = await saveCue(exerciseId, draft);
+      patch(saved.cue);
+      tapSave();
+      setNoting(null);
+    } catch (err) {
+      const status = err instanceof ApiError ? err.status : 0;
+
+      if (shouldQueueCue(status)) {
+        try {
+          await queueCue(exerciseId, draft);
+          // The server has not spoken, so the mirror speaks for it.
+          const local = normaliseCue(draft);
+          patch(local === "" ? null : local);
+          tapSave();
+          setNoting(null);
+          return;
+        } catch {
+          // The queue itself would not take it — SQLite unavailable, which is
+          // the one case where there is nowhere to put the words but the
+          // screen. Fall through to the editor rather than claiming a save.
+        }
+      }
+
+      tapError();
+      setCueProblem(
+        err instanceof Error && err.message !== ""
+          ? err.message
+          : "Could not save that cue.",
+      );
+    } finally {
+      setSavingCue(false);
+    }
+  }, [client]);
+
+  const openCue = useCallback((exerciseId: string, exerciseName: string) => {
+    setBulkFor(null);
+    setCueProblem(null);
+    setNoting({ kind: "cue", exerciseId, exerciseName });
+  }, []);
+
   const clear = useCallback(() => {
     setStage("idle");
     setRows([]);
@@ -141,6 +296,8 @@ export function QuickLog({
     setPicking(null);
     setBulkFor(null);
     setNoting(null);
+    setSavingCue(false);
+    setCueProblem(null);
     setReturnToSheet(false);
   }, []);
 
@@ -207,7 +364,7 @@ export function QuickLog({
       const parsed = await parseSets(text);
       setRows(rowsFromParse(parsed));
       setSourceText(text);
-      setSourceLabel("TYPED");
+      setSourceKind("typed");
       setUsedModel(parsed.usedModel);
       setSheetError(null);
       setStage("confirming");
@@ -238,7 +395,7 @@ export function QuickLog({
   const adoptTranscript = useCallback((parsed: TranscribeResponse) => {
     setRows(rowsFromParse(parsed));
     setSourceText(parsed.transcript);
-    setSourceLabel("HEARD");
+    setSourceKind("heard");
     setUsedModel(parsed.usedModel);
     setSheetError(null);
     setNotice(null);
@@ -332,9 +489,12 @@ export function QuickLog({
 
   const meta = editing === null ? PAD_META.weight : PAD_META[editing.field];
 
-  /** The note being edited, and a line saying which set it belongs to. */
+  /** The note or cue being edited, and a line saying what it belongs to. */
   const notingText = (() => {
     if (noting === null) return "";
+    // The cue comes from the server's map, not from a row — it belongs to the
+    // lift, and it is the stored, normalised string the server sent back.
+    if (noting.kind === "cue") return cueFor(noting.exerciseId, cues) ?? "";
     if (noting.kind === "row") return rows.find((row) => row.key === noting.key)?.note ?? "";
     // One shared note for a whole exercise: offer the first one as a starting
     // point rather than an empty field, since "same as the others" is the
@@ -344,6 +504,7 @@ export function QuickLog({
 
   const notingWhere = (() => {
     if (noting === null) return undefined;
+    if (noting.kind === "cue") return noting.exerciseName;
     if (noting.kind === "group") {
       const group = groups.find((g) => g.entryKey === noting.entryKey);
       if (group === undefined) return undefined;
@@ -355,6 +516,8 @@ export function QuickLog({
     }
     return undefined;
   })();
+
+  const editingCue = noting?.kind === "cue";
 
   return (
     <View>
@@ -412,8 +575,9 @@ export function QuickLog({
         visible={stage === "confirming"}
         rows={rows}
         sourceText={sourceText}
-        sourceLabel={sourceLabel}
+        sourceKind={sourceKind}
         usedModel={usedModel}
+        cues={cues}
         queueing={queueing}
         error={sheetError}
         onEditSource={() => {
@@ -440,6 +604,7 @@ export function QuickLog({
         onOpenPad={openPad}
         onPatch={(key: string, patch: RowPatch) => setRows((c) => patchRow(c, key, patch))}
         onOpenNote={(key) => setNoting({ kind: "row", key })}
+        onEditCue={openCue}
         onDuplicate={(key) => setRows((c) => duplicateRow(c, key))}
         onDelete={(key) => removeRow(key)}
         onPickExercise={(entryKey, query) => {
@@ -464,6 +629,7 @@ export function QuickLog({
 
       <GroupActions
         group={bulkGroup}
+        cue={cueFor(bulkGroup?.exerciseId ?? null, cues)}
         onClose={() => setBulkFor(null)}
         onPatchGroup={(entryKey, patch) => setRows((c) => patchGroup(c, entryKey, patch))}
         onFirstWarmups={(entryKey, k) => setRows((c) => markFirstWarmups(c, entryKey, k))}
@@ -471,6 +637,7 @@ export function QuickLog({
           setBulkFor(null);
           setNoting({ kind: "group", entryKey });
         }}
+        onEditCue={openCue}
         onPickExercise={(entryKey, query) => {
           setBulkFor(null);
           setPicking({ entryKey, query });
@@ -485,21 +652,54 @@ export function QuickLog({
         }}
       />
 
+      {/*
+        One editor, two meanings, and the copy is what tells them apart.
+
+        A SET NOTE is about what happened on these sets and goes with them. A
+        CUE is about the lift and comes back every time it is logged, which is
+        exactly the thing the owner could not do before — so the footnote says
+        so rather than leaving them to find out next session.
+      */}
       <TextPrompt
         visible={noting !== null}
-        title="Set note"
+        title={editingCue ? "Cue for this lift" : "Set note"}
         subtitle={notingWhere}
+        footnote={
+          editingCue
+            ? "Pinned to this lift. It appears every time you log it, until you change it — it is not logged with the set."
+            : undefined
+        }
+        placeholder={editingCue ? "Elbows tucked, pause on chest…" : undefined}
+        submitLabel={editingCue ? "PIN THIS CUE" : undefined}
+        clearLabel={editingCue ? "REMOVE THE CUE" : undefined}
+        // Only the cue has a server-side ceiling, and `cueError` is the same
+        // normalisation the server measures by, so the inline count and the
+        // 400 cannot disagree.
+        validate={editingCue ? cueError : undefined}
+        busy={savingCue}
+        error={cueProblem}
         initialText={notingText}
         onSubmit={(text) => {
           const target = noting;
-          setNoting(null);
           if (target === null) return;
+
+          // The cue is a network write: it closes this editor only once the
+          // server has confirmed it, so a failure leaves the words on screen.
+          if (target.kind === "cue") {
+            void persistCue(target.exerciseId, text);
+            return;
+          }
+
+          setNoting(null);
           setRows((c) =>
             target.kind === "row"
               ? patchRow(c, target.key, { note: text })
               : patchGroup(c, target.entryKey, { note: text }));
         }}
-        onCancel={() => setNoting(null)}
+        onCancel={() => {
+          setCueProblem(null);
+          setNoting(null);
+        }}
       />
 
       {/*

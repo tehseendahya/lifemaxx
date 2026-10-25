@@ -15,7 +15,7 @@ import {
   localSetFrom,
   mergeSets,
   numberToPad,
-  owedLine,
+  owedMuscles,
   padToNumber,
   partitionByOwed,
   pillParts,
@@ -783,17 +783,31 @@ describe("pillParts", () => {
 
 // -------------------------------------------------------------------- owed
 
-describe("owedLine", () => {
-  it("takes the top three above the threshold, in order", () => {
-    expect(owedLine(ranked)).toBe("Rear Delts · Traps · Forearms");
+/**
+ * These three were written against `owedLine`, which joined the top labels into
+ * a string for the old start screen. That card now lives in
+ * `features/lift/next.ts` and shows a figure per muscle, so `owedLine` has no
+ * caller and has been deleted — but the 0.2 cutoff it was exercising is
+ * `owedMuscles`', and `partitionByOwed` still depends on it to decide what goes
+ * under "Owed this week" in the picker. So the assertions move down one layer
+ * rather than leaving with the function they happened to be written against.
+ */
+describe("owedMuscles", () => {
+  it("keeps what is owed, highest debt first", () => {
+    expect(owedMuscles(ranked).map((m) => m.label)).toEqual([
+      "Rear Delts", "Traps", "Forearms",
+    ]);
   });
 
   it("excludes anything at or below the 0.2 cutoff", () => {
-    expect(owedLine(ranked, 10)).toBe("Rear Delts · Traps · Forearms");
+    // The whole ranked fixture goes in; only three come out, so the cutoff is
+    // doing the work rather than a slice.
+    expect(owedMuscles(ranked)).toHaveLength(3);
+    expect(owedMuscles(ranked).every((m) => m.score > 0.2)).toBe(true);
   });
 
   it("is empty when nothing is owed", () => {
-    expect(owedLine([{ ...ranked[4] }])).toBe("");
+    expect(owedMuscles([{ ...ranked[4] }])).toEqual([]);
   });
 });
 

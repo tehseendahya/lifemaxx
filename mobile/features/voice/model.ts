@@ -6,7 +6,7 @@
  * tested. A module that needs build configuration before it can be tested does
  * not get tested.
  */
-import { newClientId } from "../../lib/shared/outbox";
+import { classifyStatus, newClientId } from "../../lib/shared/outbox";
 import type { ParseResponse, SetWrite } from "../../lib/types";
 
 /**
@@ -703,6 +703,186 @@ export const PAD_META: Record<PadField, { label: string; unit: string; allowDeci
 /** `185`, `228`, `0` — whole pounds, always. See `padToPatch`. */
 export function fmtWeight(lb: number): string {
   return String(Math.round(lb));
+}
+
+// -------------------------------------------------------------- provenance
+
+/** Which door the text came in through. Drives the label AND the hint. */
+export type SourceKind = "typed" | "heard";
+
+/** `TYPED · TAP TO FIX`. The whole line is the tap target. */
+export function sourceDoorLabel(kind: SourceKind): string {
+  return `${kind === "heard" ? "HEARD" : "TYPED"} · TAP TO FIX`;
+}
+
+/**
+ * What actually read this, stated at the granularity the server reports.
+ *
+ * ── WHY THE OLD TWO STRINGS BOTH LIED ──────────────────────────────────────
+ *
+ * The sheet used to print `READ BY THE MODEL` or `READ WITHOUT THE NETWORK`
+ * off one boolean, and both were wrong in a way the owner noticed.
+ *
+ *  - `READ BY THE MODEL` marks the WHOLE paste as modelled. `usedModel` is
+ *    true when the deterministic parser left *any* line over, so one stray
+ *    line — a blank, a stray "165,5" — stamps that label across fourteen rows
+ *    that were parsed character for character. Measured against the owner's
+ *    own paste: every set line of it parses offline, and the sheet still said
+ *    the model had read it. The effect is that the one label meant to tell you
+ *    how hard to check the rows tells you to check all of them, always, which
+ *    is the same as telling you nothing.
+ *  - `READ WITHOUT THE NETWORK` is simply false. The parse is
+ *    `POST /api/sets/parse`; the text crosses the network either way. What is
+ *    absent in that case is a language MODEL, not the network — and on the mic
+ *    path a model transcribed the audio before the parser ever saw it, so that
+ *    string was claiming no model on a payload a model produced.
+ *
+ * So the hint now names the stage rather than the paste. `usedModel` says
+ * exactly one thing, and it is said back verbatim: a model read **the lines
+ * the parser could not**. That is true when it read one line of five and still
+ * true when the parser managed none of them and it read all five, so there is
+ * no case where this sentence over- or under-claims.
+ *
+ * ── WHAT WAS REJECTED, AND WHY ─────────────────────────────────────────────
+ *
+ * A per-ENTRY badge is the thing to want and it is not computable on this
+ * phone. `parseSetsText` splices the model's entries in among the
+ * deterministic ones and sends no marker on either, so nothing in
+ * `ParseResponse` says which rows came from where; `dropped` is not that
+ * marker, because both paths now emit it. A count has the same problem.
+ *
+ * Re-deriving it client-side — checking each set's figures against the digits
+ * in the source line — was also rejected, and the reason is worth keeping: a
+ * deterministically parsed `20kg` becomes `44 lb`, whose digits appear nowhere
+ * in what the owner typed, so that check would flag the parser's most reliable
+ * conversion as model guesswork. A verifier that cries wolf on correct rows is
+ * worse than the over-broad label it replaces.
+ *
+ * The honest per-entry version needs one additive boolean from the server and
+ * belongs with that change, not here.
+ */
+export function parseHint(kind: SourceKind, usedModel: boolean): string {
+  if (kind === "heard") {
+    return usedModel
+      ? "A MODEL HEARD IT AND READ THE LINES THE PARSER COULDN’T"
+      : "A MODEL HEARD IT · THE PARSER READ EVERY SET";
+  }
+  return usedModel
+    ? "A MODEL READ THE LINES THE PARSER COULDN’T"
+    : "NO MODEL · THE PARSER READ EVERY LINE";
+}
+
+// --------------------------------------------------------------------- cues
+
+/**
+ * The carry-forward cue, and what this module is allowed to know about it.
+ *
+ * A cue is pinned to an EXERCISE and lives on the server
+ * (`exercise_cues`, `POST /api/mobile/exercise/cue`). It is not a set note:
+ * `LogRow.note` is one line about one set in one session, and it scrolls away
+ * behind you. The owner asked for notes "per exercise" and the answer they
+ * chose was carry-forward — written once, shown every time that lift is
+ * logged, until they change it. The two coexist and neither is the other's
+ * default.
+ *
+ * Nothing here talks to the network. These are the rules the sheet needs so it
+ * can refuse a cue the server would refuse, measure it the way the server
+ * measures it, and index the map the way the server builds it.
+ */
+export const MAX_CUE_LENGTH = 240;
+
+/**
+ * A mirror of `normaliseCue` in `src/lib/cues.ts`. Keep the two identical.
+ *
+ * It exists on the phone for ONE reason: the length limit is enforced after
+ * normalisation on the server, so a client that measured the raw draft would
+ * reject a 243-character cue with three trailing newlines that the server
+ * would have stored happily — and would let through a draft that normalises to
+ * 241 and comes back a 400. Measuring the same string both sides is the only
+ * way the inline counter and the server agree.
+ *
+ * It is deliberately NOT used to decide what to render. The response's `cue`
+ * is what gets rendered, because the server is the one that normalised it.
+ *
+ * Line breaks survive: they are how two cues sit on one lift ("elbows tucked"
+ * above "pause on chest"), and collapsing them would throw away the only
+ * formatting this field has. `""` means "no cue" and asks for a delete.
+ */
+export function normaliseCue(raw: string): string {
+  return raw
+    .replace(/\r\n?/g, "\n")
+    .replace(/[^\S\n]+$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/**
+ * Why this draft cannot be saved, in the owner's terms, or `null`.
+ *
+ * Checked on the phone so a cue typed between sets does not cost a round trip
+ * to be told it is too long. The server answers 400 with its own sentence past
+ * the same ceiling, so this is a courtesy, never the enforcement.
+ */
+export function cueError(raw: string): string | null {
+  const cue = normaliseCue(raw);
+  if (cue.length <= MAX_CUE_LENGTH) return null;
+  return `That is ${cue.length} characters. A cue has to be ${MAX_CUE_LENGTH} or fewer.`;
+}
+
+/**
+ * This group's cue, or `null`.
+ *
+ * `undefined` and `null` both mean "no cue" and they arrive by different
+ * roads — a lift with nothing written is ABSENT from `cues` (the server's
+ * rule, so `cues[id] === undefined` is the single answer to "is there one"),
+ * and an unresolved or by-hand group has no exercise id to look one up with.
+ * Both collapse to `null` here so the view has one case to draw.
+ *
+ * `cues` is optional on `Bootstrap` because a server that predates the field
+ * sends nothing, and that has to render as no cues rather than as a crash.
+ */
+export function cueFor(
+  exerciseId: string | null,
+  cues: Record<string, string> | undefined,
+): string | null {
+  if (exerciseId === null || cues === undefined) return null;
+  return cues[exerciseId] ?? null;
+}
+
+/**
+ * The outbox id a queued cue takes, which is deliberately not random.
+ *
+ * `enqueue` keys the queue on this, and the store's `put` is an upsert on it —
+ * so deriving it from the exercise makes a second edit of the same lift REPLACE
+ * the queued write rather than line up behind it. Three edits to the bench cue
+ * in a basement leave one queued item carrying the last thing the owner typed,
+ * which is both what they meant and the only version worth a round trip.
+ *
+ * The prefix is what keeps it out of the way of a set: a set's id is its
+ * `client_id` and is a uuid, and `cue-` cannot be one.
+ */
+export function cueQueueId(exerciseId: string): string {
+  return `cue-${exerciseId}`;
+}
+
+/**
+ * Whether a failed cue write is worth queueing, or is the owner's problem to
+ * fix now.
+ *
+ * It defers to `classifyStatus`, the same function the outbox itself uses to
+ * decide what to retry, rather than restating the rule — a cue that this says
+ * to queue and the queue then classifies as permanent would be accepted on
+ * screen and dropped in the background, which is the one outcome worse than
+ * refusing it outright.
+ *
+ * So: a dead connection or a 5xx queues, because the words are good and only
+ * the network is bad. A 400 (past the ceiling) or a 404 (a lift the server
+ * cannot see) does NOT queue — it will be just as invalid in ten minutes, and
+ * the editor stays open saying why. A 401 is retryable in the queue's terms and
+ * queues here too: the cue is valid and will deliver once the session refreshes.
+ */
+export function shouldQueueCue(status: number): boolean {
+  return classifyStatus(status) === "retry";
 }
 
 // --------------------------------------------------------------- recording

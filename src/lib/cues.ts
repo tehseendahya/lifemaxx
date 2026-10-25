@@ -53,8 +53,10 @@ export const MAX_CUE_LENGTH = 240;
  * throw away the only formatting the field has.
  *
  * So: CRLF to LF so a cue pasted from a desktop does not arrive with a
- * carriage return on every line, trailing spaces off each line, three or more
- * blank lines down to one, and the whole thing trimmed. That is exactly the
+ * carriage return on every line, trailing spaces off each line, any run of
+ * blank lines down to a single one, and the whole thing trimmed. (The regex
+ * counts NEWLINES, not blank lines: `\n{3,}` is two or more blank lines, and
+ * it leaves exactly one.) That is exactly the
  * shape `exercise_cues_cue_shape` in drizzle/0005 will accept.
  *
  * Returns `""` for a cue that is only whitespace, which is how the caller is

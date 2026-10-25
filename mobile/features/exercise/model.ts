@@ -50,6 +50,22 @@ export interface SessionView {
 export interface ExerciseView {
   title: string;
   subtitle: string;
+  /**
+   * The carry-forward cue pinned to this lift, or null.
+   *
+   * `GET /api/mobile/exercise?id=` has returned this since the cue backend
+   * landed and nothing rendered it — the route's own comment said "the detail
+   * screen renders the cue above the history" while this screen had no
+   * reference to the field at all. So the owner could pin "elbows tucked,
+   * pause on chest" to the bench press and then find it nowhere on the bench
+   * press's own page.
+   *
+   * Read from THIS response rather than from `bootstrap.cues`, which is the
+   * rule the field exists for: a screen that can show a value has to read it
+   * from the request that rendered it, or it shows whichever of two caches
+   * answered last.
+   */
+  cue: string | null;
   trend: TrendPoint[];
   peakE1rmLb: number | null;
   /** Percent change from the oldest to the newest point, or null under two points. */
@@ -121,6 +137,15 @@ export function buildExerciseView(data: ExerciseHistory): ExerciseView {
   return {
     title: data.exercise.name,
     subtitle: `${data.exercise.equipment} · ${data.exercise.incrementLb} lb increment`,
+    /*
+     * `?? null` because the field is optional on the type: a server that
+     * predates the cue backend sends no `cue` at all, and that has to render as
+     * "no cue" rather than as `undefined` reaching a `<Text>`. An empty string
+     * is folded in too — the server never stores one (absence is its only
+     * representation of "no cue"), so if one ever arrives it means the same
+     * thing and must not draw an empty block.
+     */
+    cue: data.cue === undefined || data.cue === null || data.cue === "" ? null : data.cue,
     trend,
     peakE1rmLb: peak,
     changePct,

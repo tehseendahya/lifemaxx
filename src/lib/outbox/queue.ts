@@ -21,6 +21,33 @@
  */
 
 /**
+ * `cue` is the one kind here that does NOT depend on the item before it.
+ *
+ * A carry-forward cue is written in the gym, which is the same concrete the
+ * sets are written in — so a cue typed in a basement had to either queue or be
+ * lost, and "lost" was the behaviour: `saveCue` posted directly and failed, and
+ * the only thing standing between a dropped request and a lost sentence was the
+ * owner noticing the error and retrying. Sets survive that basement; a note
+ * pinned to a lift now survives it too.
+ *
+ * It is safe in this strictly-ordered queue for three reasons worth writing
+ * down, because the ordering rule above is what makes a new kind risky:
+ *
+ *  - the write is an UPSERT on (user_id, exercise_id), so a replay cannot
+ *    double and arriving after a later edit of the same cue is the only way it
+ *    could be wrong — which is why the enqueued item's id is derived from the
+ *    exercise rather than random. A second edit of the same lift REPLACES the
+ *    queued one instead of queueing behind it, so the queue holds at most one
+ *    cue per lift and the last thing the owner typed is what sends.
+ *  - a cue that the server refuses (a 400 past the ceiling, a 404 on a lift it
+ *    cannot see) classifies as `permanent` and is dropped, so it cannot wedge
+ *    the sets behind it. Only a 5xx or a dead connection blocks, and those
+ *    block the sets anyway.
+ *  - every consumer of this queue filters on `kind` before reading a payload
+ *    (`queuedSetFromItem`, `queuedSetCount`, `findQueuedStart`, the dropped-item
+ *    notices on both lift screens), so a cue in the queue is not counted as a
+ *    set, drawn as a pill, or reported as a set that failed to save.
+ *
  * `session-start` exists because `POST /api/sets` resolves the workout
  * server-side via `getActiveWorkout()` — the set payload carries no workout id.
  * So the first set of the day in a basement has nowhere to land unless the
@@ -28,7 +55,7 @@
  * order and stops at the first failure, an ordered start-then-sets queue makes
  * that work with no new server contract at all.
  */
-export type OutboxKind = "set" | "session-start";
+export type OutboxKind = "set" | "session-start" | "cue";
 
 export interface OutboxItem {
   /** Also the row's client_id, so a retry after a lost response is not a duplicate. */

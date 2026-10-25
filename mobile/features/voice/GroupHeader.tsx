@@ -44,6 +44,43 @@ const styles = StyleSheet.create({
 
   evidence: { ...microLabel, marginBottom: 0, marginTop: 2 },
 
+  /**
+   * The carry-forward cue, and the one block on this header drawn on a filled
+   * surface rather than as bare type.
+   *
+   * It is the only thing here the owner WROTE. The name, the equipment, the
+   * `heard:` line and the `ignored:` line are all the app reporting what it
+   * worked out; the cue is their own instruction to themselves, coming back at
+   * the moment it is useful. A filled box says "this came from you" without
+   * needing a word to say it, and it keeps a two-line cue from reading as a
+   * third machine-generated evidence line.
+   *
+   * No left border, deliberately: the group already carries a 2pt left border
+   * for its match state and a second one 12pt inside it reads as a nesting
+   * level that does not exist.
+   */
+  cue: {
+    marginTop: space.sm,
+    paddingHorizontal: space.sm,
+    paddingVertical: space.sm,
+    borderRadius: radius.sm,
+    backgroundColor: color.surface2,
+  },
+  cuePressed: { opacity: 0.6 },
+  cueLabel: { ...microLabel, marginBottom: space.xs, color: color.accentInk },
+  // No `numberOfLines`. A cue may hold a newline — "elbows tucked" above
+  // "pause on chest" — and that is the only formatting the field has.
+  cueText: { color: color.ink, fontSize: 13, lineHeight: 19 },
+
+  addCue: {
+    minHeight: hit.min,
+    justifyContent: "center",
+    paddingHorizontal: space.sm,
+    marginVertical: -space.sm,
+  },
+  addCuePressed: { opacity: 0.55 },
+  addCueText: { ...microLabel, marginBottom: 0, color: color.accentInk },
+
   askRow: { flexDirection: "row", alignItems: "center", gap: space.sm, marginTop: space.xs },
   askText: { color: color.ink, fontSize: 14, flex: 1 },
   askButton: { paddingHorizontal: space.md },
@@ -105,14 +142,42 @@ export const GROUP_BORDER: Record<MatchState, ViewStyle> = {
  * The EQUIPMENT on the right is the other half of the same fix. "Incline Press
  * · SMITH" and "Incline Press · BARBELL" differ by one word in the middle of a
  * name; they differ at a glance in a column.
+ *
+ * ── WHY THE CUE IS HERE AND NOT ANYWHERE ELSE ──────────────────────────────
+ *
+ * The owner asked for "a place to add notes per exercise". A cue is pinned to
+ * the lift and shown every time it is logged, so the only honest place for it
+ * is between the lift's name and its sets — the one spot on the phone where
+ * those two facts are already on screen together, with the number pad a tap
+ * away and the bar still in your hands.
+ *
+ * It is deliberately NOT inside the `⋯` sheet, which is the obvious cheap
+ * answer and is wrong twice: that sheet only appears at three sets or more
+ * (`BULK_MIN_SETS`), so a cue would be unreachable on a two-set exercise, and
+ * a cue you have to open a sheet to read is a cue you do not read. It is in
+ * that sheet as WELL, because that sheet is "everything you can do to this
+ * exercise" and omitting it there would be a hole.
+ *
+ * It is also not a `LogRow.note`. The note is one line about one set, written
+ * to the set and gone with it; the cue is one line about the LIFT that comes
+ * back forever. Both exist on this header's rows and neither is the other's
+ * default — see the `cues` section of `model.ts`.
  */
 export function GroupHeader({
   group,
+  cue,
+  onEditCue,
   onPickExercise,
   onUseNearMiss,
   onBulk,
 }: {
   group: SetGroup;
+  /**
+   * This lift's carry-forward cue, or `null` — which covers both "nothing
+   * written" and "no exercise to pin one to". See `cueFor` in `model.ts`.
+   */
+  cue: string | null;
+  onEditCue: (exerciseId: string, exerciseName: string) => void;
   onPickExercise: (entryKey: string, query: string) => void;
   /** Re-file onto the near miss, learn the wording, remove the exercise just created. */
   onUseNearMiss: (entryKey: string, nearMiss: { id: string; name: string }) => void;
@@ -121,6 +186,17 @@ export function GroupHeader({
   const { match, query } = group;
   const name = group.exerciseName ?? "";
   const showBulk = group.rows.length >= BULK_MIN_SETS;
+
+  /**
+   * A cue needs something to be pinned TO, and an unresolved or by-hand group
+   * has no exercise id yet. The affordance is therefore absent rather than
+   * disabled: offering it on the one group the owner has to fix first would
+   * compete with `PICK AN EXERCISE`, which is the only thing that unblocks the
+   * confirm button.
+   */
+  const cuable = group.exerciseId !== null && group.exerciseName !== null
+    ? { id: group.exerciseId, name: group.exerciseName }
+    : null;
 
   return (
     <View style={styles.root}>
@@ -239,9 +315,67 @@ export function GroupHeader({
         </Button>
       )}
 
+      {/*
+        The cue, last before the sets, which is where it is read between them.
+        
+        It comes AFTER the near-miss question and `PICK AN EXERCISE` on purpose:
+        those two are a conversation about whether this is even the right lift,
+        and a cue wedged into the middle of it is both premature and in the way.
+        Once the lift is settled, the cue is the last thing the eye crosses on
+        the way down to the figures.
+
+        The whole block is the edit control — a 44pt-plus target, no separate
+        pencil. A cue nobody can tap is a cue nobody can correct.
+      */}
+      {cue !== null && cuable !== null && (
+        <Pressable
+          onPress={() => {
+            tapSelect();
+            onEditCue(cuable.id, cuable.name);
+          }}
+          accessibilityRole="button"
+          accessibilityLabel={`Cue for ${cuable.name}: ${cue}. Tap to edit it.`}
+          style={({ pressed }) => [styles.cue, pressed && styles.cuePressed]}
+        >
+          <Text style={styles.cueLabel}>CUE · TAP TO EDIT</Text>
+          <Text style={styles.cueText}>{cue}</Text>
+        </Pressable>
+      )}
+
       <View style={styles.summaryRow}>
         <Text style={styles.summary}>{groupSummary(group)}</Text>
         <View style={styles.spacer} />
+
+        {/*
+          With no cue written, the affordance rides the summary row rather than
+          taking a line of its own. Fifteen sets across five exercises is the
+          normal paste for this owner, and five dedicated "ADD A CUE" rows
+          would be five rows of chrome above the sets they are meant to be read
+          beside. Once a cue exists it gets the block above instead, which is
+          the right trade: it is worth space when it has something to say.
+        */}
+        {cue === null && cuable !== null && (
+          <Pressable
+            onPress={() => {
+              tapSelect();
+              onEditCue(cuable.id, cuable.name);
+            }}
+            accessibilityRole="button"
+            accessibilityLabel={`Pin a cue to ${cuable.name}. It shows every time you log this lift.`}
+            hitSlop={{ top: 8, bottom: 8 }}
+            style={({ pressed }) => [styles.addCue, pressed && styles.addCuePressed]}
+          >
+            {/*
+              "CUE", not "NOTE". Every set line below already has a note dot
+              and they are different things — one is about the set, one is
+              about the lift. Two controls both called a note, a centimetre
+              apart, doing different things, is worse than one unfamiliar word
+              that the editor's own footnote defines.
+            */}
+            <Text style={styles.addCueText}>+ PIN A CUE</Text>
+          </Pressable>
+        )}
+
         {showBulk && (
           <Pressable
             onPress={() => {

@@ -64,11 +64,12 @@ export const GET = route(async ({ userId, searchParams }) => {
     /**
      * The carry-forward cue for this lift, or null.
      *
-     * Here as well as in `bootstrap` because this screen is where the cue is
-     * edited, and a screen that can change a value has to read it from the
-     * same request that renders it — otherwise its save and the next
-     * bootstrap are two sources of truth for one field, and the one on
-     * screen is whichever arrived last.
+     * Here as well as in `bootstrap` because this screen SHOWS the cue, and a
+     * screen that displays a value it did not fetch is showing whichever of
+     * two caches answered last. The detail screen reads this field; it does
+     * not write one — the confirm sheet is the single editor, and
+     * `POST exercise/cue` invalidates `queryKeys.exercise(id)` so a cue
+     * changed there is refetched through here rather than patched twice.
      */
     cue,
     history: history.map((session) => ({

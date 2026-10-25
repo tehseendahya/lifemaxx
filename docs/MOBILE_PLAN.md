@@ -192,7 +192,7 @@ anywhere in this round.
 
 ### 6. The backend read API (the second gap, discovered while reading)
 
-**Choice.** A new read surface at `src/app/api/mobile/*`: `GET bootstrap`, `GET session`, `GET exercise?id=`, `GET food?date=`, `GET coach`, `POST exercise/alias`. Owned by one engineer (backend-auth).
+**Choice.** A new read surface at `src/app/api/mobile/*`: `GET bootstrap`, `GET session`, `GET exercise?id=`, `GET food?date=`, `GET coach`, `POST exercise/alias`, `POST exercise/cue`. Owned by one engineer (backend-auth).
 
 **Why.** The web app has NO read API — every screen reads `src/lib/queries.ts` directly from a server component. There are only POST/DELETE routes today. Without GET endpoints the native app authenticates successfully and then displays nothing. `bootstrap` is deliberately one fat call (dashboard + 56 days of runs + full exercise catalogue + last set per exercise) so the phone has everything it needs to work in a basement after a single request.
 
@@ -791,6 +791,15 @@ Query param, not a dynamic segment (`route()` does not forward `params`). Return
 
 ### `POST /api/mobile/exercise/alias`
 `{ exerciseId: string, alias: string }` → calls the existing `learnAlias()` in `src/lib/exercises.ts`. Returns `{ ok: true }`. This is how a corrected voice mishearing becomes free next time. Validate `exerciseId` is a uuid the user can actually see; a non-empty alias under 80 chars.
+
+### `POST /api/mobile/exercise/cue`
+`{ exerciseId: string, cue: string }` → `setCue()` in `src/lib/cues.ts`. Returns `{ exerciseId, cue }`, where `cue` is the string **as stored** (normalised) or `null` when it was cleared. One verb for write, replace and clear: `cue: ""`, or anything that is only whitespace, deletes the row, because the absence of a row is the only representation of "no cue" there is. Upserts on `(user_id, exercise_id)`, so a retry or a replayed outbox item cannot duplicate. Validate `exerciseId` is a uuid the user can see (404 otherwise) and the normalised cue at 240 characters or fewer (400).
+
+This is the carry-forward answer to "there is no place to add notes per exercise". It is **not** `sets.note`, which stays what it was: one line about one set, in one session. A cue is pinned to the lift and shown every time that lift is logged.
+
+**Reads.** The cue travels on two existing payloads rather than a third endpoint: `GET bootstrap` carries a flat `cues: Record<exerciseId, string>` (lifts with no cue are **absent**, never `""`, so `cues[id] === undefined` is the single answer to "is there one"), and `GET exercise?id=` carries that lift's own `cue: string | null`. Bootstrap is what puts a cue on screen in a basement with no signal.
+
+**Offline.** `OutboxKind` includes `"cue"`, so a cue typed with no signal queues like a set rather than failing. The queued item's id is derived from the exercise, so re-editing the same lift's cue replaces the queued write instead of stacking behind it. See the comment on `OutboxKind` in `src/lib/outbox/queue.ts` for why a non-ordered kind is safe in a strictly-ordered queue.
 
 ## Job 4 — CORS
 
