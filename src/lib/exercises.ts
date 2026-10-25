@@ -53,52 +53,67 @@ export interface ResolvedExercise {
  * transcribe`, `scripts/verify-db.ts`, which asserts that "benh pres" ->
  * barbell-bench-press and scores exactly 0.467).
  *
- * Measured against the live alias table, 45 realistic typos of catalogue names
- * scored: min 0.313, p10 0.545, median 0.643. So almost every typo a person
- * actually makes clears this bar and matches without being asked about.
+ * Measured against the seeded 147-exercise catalogue, 31 realistic typos of
+ * catalogue names that are NOT already aliases scored: min 0.538, p10 0.545,
+ * median 0.643. Every one of them clears this bar, so a misspelling of a lift
+ * the catalogue knows about resolves without a question being asked at all.
  *
  * KNOWN LIMITATION, and it is the one worth reading. Trigram similarity
  * measures shared characters, not shared meaning, so a DIFFERENT movement that
- * borrows a head noun also clears this bar: "incline smith press" scores 0.700
- * against "incline press" and "cable rope hammer curls" scores 0.458 against
- * "hammer curl". Both are confidently, wrongly matched — which is exactly what
- * the owner saw. Measured over 34 genuinely different movements the worst case
- * was 0.706, so a bar of ~0.72 would catch all of them, at the cost of turning
- * two thirds of ordinary typos into questions and of breaking the assertion in
- * verify-db.
+ * borrows a head noun also clears this bar. Against the same catalogue: "JM
+ * press" (0.667), "Tate press" (0.545) and "viking press" (0.462) all match
+ * Overhead Press, and "kang squat" (0.545) and "zombie squat" (0.462) both
+ * match Back Squat. Those are five different lifts filed as two.
  *
- * That trade is not taken here, because the real fix for those two lines is
- * the one being made in parallel: the catalogue gains the smith machines, the
- * pec deck, the preacher bench and the rope attachments, with aliases, so they
- * resolve EXACTLY at tier 1 and never reach the fuzzy tier at all. This
- * threshold is a named constant so that decision stays one line to revisit.
+ * The bar is not raised to fix that, for two reasons. The honest cut-off would
+ * be ~0.72 — above the worst wrong match measured — and at that height two
+ * thirds of ordinary typos become questions. And it would break the assertion
+ * in `scripts/verify-db.ts`, which checks that "benh pres" resolves to
+ * barbell-bench-press on a score of exactly 0.467; `parseSetsText` and
+ * `/api/voice/transcribe` both depend on the same behaviour.
+ *
+ * What did fix the owner's five lines is the catalogue work done in parallel.
+ * Re-measured after it landed, "incline smith press", "pec deck", "preacher
+ * curls" and "cable rope hammer curls" all resolve EXACTLY at tier 1 and never
+ * reach this tier at all. The residual cases above are obscure lifts the
+ * catalogue still lacks; the only real fix for each is an alias. This threshold
+ * is a named constant so that the decision stays one line to revisit.
  */
 export const FUZZY_MATCH_SCORE = 0.45;
 
 /**
- * At or above this score — and at or below `FUZZY_MATCH_SCORE` — the typed
- * text is close enough to something that already exists to be worth one
- * question before a new row is written. Below it, nothing resembles the text
- * and it is created with no interruption.
+ * At or above this score — and at or below `FUZZY_MATCH_SCORE` — the typed text
+ * is close enough to something that already exists to be worth one question
+ * before a new row is written. Below it, nothing resembles the text and it is
+ * created with no interruption.
  *
- * **0.30**, from the same measurement. The lowest score any of the 45 typos
- * reached was 0.313 ("bnch prs" against "bench press"), so 0.30 is the floor
- * of the population this band exists to catch: below it, nothing in the sample
- * was a misspelling of anything.
+ * **0.40**, and the narrowness of the band is the finding rather than a
+ * compromise. Three measurements against the seeded catalogue chose it:
  *
- * The cost is counted honestly: genuinely new movements scored min 0.077, p10
- * 0.308, median 0.444 against the 35-row catalogue, so some of them — a
- * "preacher curls" at 0.400, a "zercher squat" at 0.429 — land in the band and
- * cost one tap to confirm. That is deliberate and it is the right way round.
- * Answering "no, it's new" costs a tap and is immediately correct; a wrongly
- * created duplicate is silent, and it corrupts every trend, e1RM and
- * progression number for that lift from then on.
+ *  1. Typos of CATALOGUE lifts do not land in this band at all — they scored
+ *     min 0.538 and matched outright. With a complete catalogue the match bar
+ *     is already doing that job.
+ *  2. Typos of a user's OWN custom exercise are the case that still needs
+ *     catching, because such a row has one or two aliases rather than six and
+ *     therefore scores lower. Over 20 of those: median 0.688, p10 0.444, min
+ *     0.318, and 16 of 20 cleared the match bar on their own. Of the four that
+ *     did not, 0.40 catches three (0.444, 0.444, 0.438 — "zorbax" against
+ *     "zorbax thruster" is the shape of them) and lets one through: "zorbx
+ *     thrstr" at 0.318, which is three characters of damage in two words.
+ *  3. Genuinely new movements scored p25 0.304, median 0.421. At 0.40, eight of
+ *     nineteen are created with zero taps and four are asked about; dropping to
+ *     0.30 would have asked about nine of them while catching exactly one extra
+ *     typo. The owner asked for zero taps on a genuinely new lift, so the band
+ *     is kept as tight as the typo evidence allows rather than as wide as
+ *     possible.
  *
- * This band also shrinks as the catalogue grows: the more complete the
- * catalogue is, the more of these names hit tier 1 exactly and never get
- * scored at all.
+ * The asymmetry is still respected where it costs something: answering "no,
+ * it's new" is one tap and is immediately correct, whereas a wrongly created
+ * duplicate is silent and corrupts every trend, e1RM and progression number for
+ * that lift from then on. That is why the band is not closed entirely, which
+ * the evidence above would otherwise support.
  */
-export const NEAR_MISS_SCORE = 0.3;
+export const NEAR_MISS_SCORE = 0.4;
 
 /**
  * What resolution actually answers.

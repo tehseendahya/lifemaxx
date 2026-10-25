@@ -81,19 +81,42 @@ export const POST = route<Body>(async ({ userId, body }) => {
 
   const outcome = await resolveExerciseOutcome(typed, userId);
 
-  if (outcome.kind === "match") {
+  /*
+   * ONLY AN EXACT ALIAS COUNTS AS "YOU ALREADY HAVE THIS".
+   *
+   * Everywhere else in the app a fuzzy match is good enough to act on. Here it
+   * is not, and the difference is who is asking. Reaching this route means the
+   * user has typed a name, looked at a list of what matched it, and pressed
+   * add anyway — they have already rejected the near things. Handing back a
+   * fuzzy match would answer a different question than the one asked and would
+   * reproduce, in the one screen built to fix it, exactly the complaint that
+   * started this round: a confident wrong match with no way to override it.
+   *
+   * Measured, this is not hypothetical. "gronk preacher curl" fuzzy-matches the
+   * catalogue's Preacher Curl, and "jm press" fuzzy-matches Overhead Press. So
+   * a fuzzy match is demoted to the same question a near miss gets, and `force`
+   * answers both.
+   *
+   * Idempotency survives it: creating also learns the typed wording as an
+   * alias, so the second identical call resolves EXACTLY and lands here as
+   * "exists". A double-tapped button, or a retry after a timeout that actually
+   * succeeded, still returns the one row the first call wrote.
+   */
+  if (outcome.kind === "match" && outcome.exercise.confidence === "exact") {
     return { created: false, reason: "exists", exercise: await dto(outcome.exercise) };
   }
 
-  if (outcome.kind === "near_miss" && body.force !== true) {
+  if (body.force !== true && (outcome.kind === "match" || outcome.kind === "near_miss")) {
+    const candidate = outcome.kind === "match" ? outcome.exercise : outcome.candidate;
     return {
       created: false,
       reason: "near_miss",
-      suggestion: await dto(outcome.candidate),
+      suggestion: await dto(candidate),
       // Rounded for the sake of anything that logs it; the client shows the
       // name, never the number. A score is not a thing to put in front of
-      // somebody mid-workout.
-      score: Math.round(outcome.score * 100) / 100,
+      // somebody mid-workout. Null for a fuzzy match, whose score is above the
+      // band and would only mislead if it were read as one.
+      score: outcome.kind === "near_miss" ? Math.round(outcome.score * 100) / 100 : null,
     };
   }
 
