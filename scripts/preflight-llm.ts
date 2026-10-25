@@ -2,10 +2,13 @@ import "../load-env";
 import OpenAI from "openai";
 import { OpenAiProvider } from "../src/lib/llm/openai";
 import { MODELS } from "../src/lib/models";
+import { nonAnswerReason } from "../src/lib/llm/non-answer";
 import {
   JSON_SCHEMAS, mealAnalysisSchema, parsedSetsSchema, suggestionSchema,
 } from "../src/lib/llm/schemas";
-import { mealMessages, SETS_SYSTEM, SUGGEST_SYSTEM, COACH_VOICE } from "../src/lib/llm/prompts";
+import {
+  mealMessages, SETS_SYSTEM, SUGGEST_SYSTEM, COACH_VOICE, coverageBlock, goalsBlock,
+} from "../src/lib/llm/prompts";
 
 /**
  * Exercises every OpenAI route against the live API, once, for a few cents.
@@ -32,6 +35,33 @@ const PIXEL =
   "AAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==";
 
 let failures = 0;
+
+/**
+ * The owner's real goals and their real state on the day the coach failed them:
+ * one lift day, one weigh-in, one day of food. Every stream thin.
+ *
+ * Kept here verbatim because the whole point of the prompt rewrite is that THIS
+ * context produces an answer. No unit test can check that — only a live model
+ * can — so the probe below is the only thing in the repo that can catch a
+ * regression to "1 logged day is too thin to call."
+ */
+const THIN_OWNER_PREFIX = [
+  goalsBlock(
+    "Main priority is strength on compound lifts, getting arms to be bigger, and getting good strong abs.\n"
+    + "Main lifts: 205 bench press by December, 225 by May.\n"
+    + "10 weighted pull ups with 45lb plate by May\n"
+    + "Current split: chest, side delts, and biceps, back, rear delts, and triceps, legs\n"
+    + "Abs and run 2x per week",
+  ),
+  COACH_VOICE,
+  coverageBlock({ windowDays: 14, intakeDays: 1, liftDays: 1, weighIns: 1 }),
+].join("\n\n");
+
+/** Fails the step when the reply refuses instead of answering. */
+function rejectNonAnswer(reply: string): void {
+  const reason = nonAnswerReason(reply);
+  if (reason !== null) throw new Error(`${reason} — got: "${reply.trim()}"`);
+}
 
 async function step(name: string, fn: () => Promise<string>) {
   process.stdout.write(`  ${name} … `);
@@ -162,6 +192,49 @@ async function main() {
       maxTokens: 300,
     })) out += chunk;
     if (!out.trim()) throw new Error("stream produced no content");
+    return `${out.trim().slice(0, 90)}…`;
+  });
+
+  /*
+   * The regression probe for complaint 5. Asked for thoughts on their goals and
+   * plan with one logged day, the coach answered "1 logged day is too thin to
+   * evaluate your eating or lifting plan"; asked again, explicitly, for an
+   * analysis even if inaccurate, it answered "1 logged day is too thin to
+   * call." Both questions are answerable from the goals text alone.
+   */
+  await step("coach/chat      (thin log, must still answer)", async () => {
+    let out = "";
+    for await (const chunk of llm.stream({
+      model: MODELS.coachChat,
+      messages: [
+        { role: "system", content: THIN_OWNER_PREFIX },
+        { role: "user", content: "What do you think of my goals and my plan?" },
+      ],
+      maxTokens: 400,
+    })) out += chunk;
+    rejectNonAnswer(out);
+    return `${out.trim().slice(0, 90)}…`;
+  });
+
+  await step("coach/chat      (pushed back on, must not dig in)", async () => {
+    let out = "";
+    for await (const chunk of llm.stream({
+      model: MODELS.coachChat,
+      messages: [
+        { role: "system", content: THIN_OWNER_PREFIX },
+        { role: "user", content: "What do you think of my goals and my plan?" },
+        {
+          role: "assistant",
+          content:
+            "205 by December is the binding constraint: it is the nearest dated goal and the only one "
+            + "with a number attached. Generally, a bench that has to move 40 lb in two months needs "
+            + "two sessions a week on it, and your split gives it one.",
+        },
+        { role: "user", content: "gimme your analysis even if not super accurate" },
+      ],
+      maxTokens: 400,
+    })) out += chunk;
+    rejectNonAnswer(out);
     return `${out.trim().slice(0, 90)}…`;
   });
 

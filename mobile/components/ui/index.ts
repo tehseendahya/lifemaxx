@@ -75,6 +75,12 @@ export { Label, microLabel } from "./Label";
 export { MacroBar } from "./MacroBar";
 export { NumberPad } from "./NumberPad";
 export { Pill } from "./Pill";
+/**
+ * A value against a target band. Deliberately not exported from `charts.tsx`:
+ * that file forbids status colour ("a line is not a state") and this *is* a
+ * state, so it is a meter rather than a chart and the two do not share a file.
+ */
+export { RangeBar } from "./RangeBar";
 export { Screen } from "./Screen";
 export { Sheet } from "./Sheet";
 /**

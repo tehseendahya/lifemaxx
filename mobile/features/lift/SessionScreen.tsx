@@ -100,6 +100,8 @@ type PadField = { field: "weight" | "reps"; exerciseId: string } | null;
  */
 const NO_SETS: SessionPayload["sets"] = [];
 const NO_CATALOGUE: CatalogueExercise[] = [];
+/** A stable identity, so the seed effect below does not re-run on every render. */
+const NO_SEED: string[] = [];
 
 /**
  * The live session.
@@ -124,6 +126,7 @@ export function SessionScreen({
   startedAtMs,
   pendingSession,
   notice,
+  seedExerciseIds = NO_SEED,
   onStopped,
 }: {
   bootstrap: Bootstrap | undefined;
@@ -133,6 +136,15 @@ export function SessionScreen({
   /** The start is queued and the server has not confirmed a workout yet. */
   pendingSession: boolean;
   notice: string | null;
+  /**
+   * Lifts this session should open with a page for, before any set exists.
+   *
+   * REPEAT THIS SESSION and PICK A LIFT on the start screen both set it. It
+   * seeds pages only: `resolveEntry`'s history rung reads `bootstrap.lastSets`
+   * and puts last session's weight and reps on each hero button, so the work is
+   * one tap away and NOTHING is written until that tap.
+   */
+  seedExerciseIds?: string[];
   onStopped: () => void;
 }) {
   // While a session is live the screen is read between sets, with wet hands,
@@ -146,7 +158,7 @@ export function SessionScreen({
   const suggestions = useSuggestions();
 
   const [page, setPage] = useState(0);
-  const [addedIds, setAddedIds] = useState<string[]>([]);
+  const [addedIds, setAddedIds] = useState<string[]>(seedExerciseIds);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [localSets, setLocalSets] = useState<LocalSet[]>([]);
   const [pad, setPad] = useState<PadField>(null);
@@ -197,6 +209,24 @@ export function SessionScreen({
       return next.length === current.length ? current : next;
     });
   }, [serverSets, queued.sets]);
+
+  /*
+   * A seed that arrives after this screen has mounted.
+   *
+   * The initialiser above covers the ordinary case — the seed and the local
+   * start time are set in one batch, so the session mounts with its pages
+   * already there. This covers the one that is not ordinary: a session resumed
+   * from the server while the start screen's repeat was in flight, where this
+   * component is already mounted when the seed lands. Additive and idempotent,
+   * so it cannot drop a page the user added by hand in between.
+   */
+  useEffect(() => {
+    if (seedExerciseIds.length === 0) return;
+    setAddedIds((current) => {
+      const missing = seedExerciseIds.filter((id) => !current.includes(id));
+      return missing.length === 0 ? current : [...current, ...missing];
+    });
+  }, [seedExerciseIds]);
 
   const catalogue: CatalogueExercise[] = bootstrap?.catalogue ?? NO_CATALOGUE;
   const exercises = useMemo(

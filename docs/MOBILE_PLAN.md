@@ -1417,7 +1417,9 @@ Render the stream by appending to a single assistant message as chunks arrive. K
 
 A chat transcript, not a dashboard. Load history from `GET /api/mobile/coach`, oldest at the top. User messages right-aligned in `accentSoft` with `accentInk` text; assistant messages left-aligned on `surface`, full width, selectable. One multi-line `TextInput` pinned at the bottom with a `SEND` button, growing to four lines then scrolling; the system keyboard is correct here. While streaming: `SEND` is disabled and a cursor-style block follows the text.
 
-The coach's voice is set by the system prompt — blunt, one recommendation, no praise, says "not enough data" when there isn't any. **Do not soften it in the UI**: no encouraging empty state, no suggestion chips that prompt for compliments. An empty transcript shows `Empty` with: `Ask about your training, your macros, or what to change this week.`
+The coach's voice is set by the system prompt — blunt, one recommendation, no praise. **Do not soften it in the UI**: no encouraging empty state, no suggestion chips that prompt for compliments.
+
+It used to say `"not enough data" when there isn't any`, and that clause was the bug — see §5.4 of SPEC.md. A thin log changes what the coach cites and whether it may call a trend; it never changes whether the question gets answered. Nothing in the UI may promise otherwise, so the subtitle reads `Your own data, with the sample size stated. Thin weeks still get an answer.` and the empty transcript says the two questions that need no history: `Ask about your plan, a lift, or tonight's macros. Questions about your goals and your split need nothing logged at all.`
 
 `ASK` **inside the lift session** is a different thing and is owned by the lift workstream — it hits `/api/session/ask`. Export a reusable `useStreamingAsk(path)` hook from `mobile/features/coach/` so the lift feature can import it rather than writing a second streaming client. Keep its signature simple: `{ messages, send(question), streaming, error }`.
 

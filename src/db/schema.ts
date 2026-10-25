@@ -131,6 +131,26 @@ export const exerciseAliases = pgTable("exercise_aliases", {
   userId: uuid("user_id").references(() => profiles.id, { onDelete: "cascade" }),
 }, (t) => [uniqueIndex("exercise_aliases_alias_user_idx").on(t.alias, t.userId)]);
 
+/**
+ * One cue per lift, per user, shown every time that lift is logged.
+ *
+ * Not `sets.note`, which is one line about one set in one session and is gone
+ * the moment the session is. This is "elbows tucked, pause on chest": written
+ * once, carried forward forever.
+ *
+ * A table rather than a column on `exercises` because a cue belongs to
+ * (user, exercise). The catalogue rows have `user_id IS NULL`, are shared by
+ * every account and are unwritable from a request by design — see
+ * drizzle/0005, which also carries the CHECK constraint that keeps an empty
+ * cue from being a second spelling of "no cue".
+ */
+export const exerciseCues = pgTable("exercise_cues", {
+  userId: uuid("user_id").notNull().references(() => profiles.id, { onDelete: "cascade" }),
+  exerciseId: uuid("exercise_id").notNull().references(() => exercises.id, { onDelete: "cascade" }),
+  cue: text("cue").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [primaryKey({ columns: [t.userId, t.exerciseId] })]);
+
 /** contribution: 1.0 primary, 0.5 secondary. Sums into hard-sets-per-muscle. */
 export const exerciseMuscles = pgTable("exercise_muscles", {
   exerciseId: uuid("exercise_id").notNull().references(() => exercises.id, { onDelete: "cascade" }),

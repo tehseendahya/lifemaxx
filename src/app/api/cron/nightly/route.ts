@@ -69,7 +69,12 @@ export async function GET(req: Request) {
           { role: "system", content: `${goalsBlock(user.goalsText)}\n\n${COACH_VOICE}` },
           {
             role: "user",
-            content: `Today's totals:\n${stableJson(summary)}\n\nWrite the end-of-day verdict. Two sentences. Lead with whatever is off, and give exactly one thing to do about it.`,
+            // The voice rules forbid calling a trend from fewer than five
+            // logged days, and this message carries exactly one. Scoping the
+            // verdict to today explicitly is what keeps that from reading as a
+            // reason to say nothing: one day against a target is a judgement
+            // the data fully supports.
+            content: `Today's totals:\n${stableJson(summary)}\n\nWrite the end-of-day verdict. Two sentences. This is one day measured against the targets above, not a trend — judge it on that and do not reach for a pattern. Lead with whatever is off, and give exactly one thing to do about it.`,
           },
         ],
         maxTokens: 200,

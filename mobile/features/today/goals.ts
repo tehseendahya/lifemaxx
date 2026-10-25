@@ -12,7 +12,7 @@ import type { CatalogueExercise } from "../../lib/types";
  * Structure pulled out of the prose the owner typed into a textarea.
  *
  * The honest framing: `goals_text` is free text and will stay free text. This
- * does NOT parse it — it looks for four narrow, deterministic shapes and
+ * does NOT parse it — it looks for five narrow, deterministic shapes and
  * reports everything else as unread. There is no model call (so this works in a
  * basement, instantly, for free) and no heuristic that can *invent* a target:
  * every number in a `GoalClaim` was typed by the owner.
@@ -35,6 +35,25 @@ export type GoalClaim =
       targetLb: number;
       byDate: string | null;
     }
+  /**
+   * A rep target on a named lift: "10 weighted pull ups with 45lb plate by May".
+   *
+   * A separate kind rather than a `lift` with an extra field, because nothing in
+   * `bootstrap` can measure it — `lastSets` carries the modal set and
+   * `history.mainLifts` carries e1RM points, and neither answers "most reps at
+   * ≥45 lb". So this kind renders a fact beside a target and never computes a
+   * gap. See `gapFor` in `model.ts`.
+   */
+  | {
+      kind: "lift_reps";
+      sentence: string;
+      exerciseId: string;
+      exerciseName: string;
+      targetReps: number;
+      /** The added load, when it was written with its unit. Null otherwise. */
+      loadLb: number | null;
+      byDate: string | null;
+    }
   | { kind: "run_distance"; sentence: string; distanceMi: number; byDate: string | null }
   | {
       kind: "run_time";
@@ -49,6 +68,20 @@ export interface GoalClaims {
   /** Sentences no pattern matched. Shown verbatim, never reinterpreted. */
   rest: string[];
 }
+
+/**
+ * What an unmatched sentence is, so the card can file it.
+ *
+ * `"aim"` is something the owner is working on with no number in it — "getting
+ * arms to be bigger". `"context"` is a standing fact about how they train —
+ * "Current split: chest, side delts, and biceps". The distinction exists
+ * because they want different presentation (an aim is a goal, context is
+ * background the coach reads), and for no other reason: both are shown
+ * verbatim, neither is reinterpreted, and nothing downstream computes anything
+ * from either. A misfile costs one line under the wrong heading, which is why
+ * this is two regexes and not a model call.
+ */
+export type RestKind = "aim" | "context";
 
 /** A weight written with its unit. kg is converted and rounded to whole lb. */
 const WEIGHT_WITH_UNIT = /(\d{2,3}(?:\.\d)?)\s*(lb|lbs|pounds|kg)\b/i;
@@ -84,6 +117,27 @@ const NAMED_DISTANCES: { re: RegExp; mi: number }[] = [
 const MILES = /\b(\d{1,3}(?:\.\d)?)\s*(?:mi|mile|miles)\b/i;
 
 /**
+ * A rep count. Two shapes, both of which the owner writes.
+ *
+ * `LEADING_REPS` is anchored so it cannot fire on a weight: `\d{1,2}` then
+ * whitespace means "205 bench press" fails the match outright (three digits),
+ * while "10 weighted pull ups" takes it.
+ */
+const LEADING_REPS = /^\s*(\d{1,2})\s+/;
+const EXPLICIT_REPS = /\b(\d{1,2})\s*reps?\b/i;
+
+/**
+ * Every weight-shaped figure in a sentence, in source order.
+ *
+ * Used only to find a SECOND dated target in one sentence. The unit group is
+ * optional so "225 by May" is seen, and a figure touching a colon is dropped so
+ * the minutes of a `1:50` are never offered as a weight — the same hazard
+ * `weightLbIn` guards with its clock strip, handled here by position instead
+ * because this scan has to report indices.
+ */
+const WEIGHT_SCAN = /\b(\d{2,3}(?:\.\d)?)\s*(lb|lbs|pounds|kg)?\b/gi;
+
+/**
  * Words stripped from a catalogue name before matching.
  *
  * Only the four that name the implement and that nobody types when they are
@@ -100,6 +154,14 @@ const MONTHS = [
 ];
 
 const ISO_DATE = /\b(\d{4})-(\d{2})-(\d{2})\b/;
+
+/**
+ * When a bare "may" is the month rather than the verb.
+ *
+ * A date preposition in front, or a day number behind. "I may add a deload"
+ * and "maybe deload" take neither; "by May", "in May 2027" and "May 3" all do.
+ */
+const MAY_AS_MONTH = /\b(?:by|in|before|until|til|till|around|come)\s+may\b|\bmay\s+\d/i;
 
 const tokenize = (text: string): string[] =>
   text.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
@@ -129,8 +191,8 @@ export function extractGoalClaims(
   const rest: string[] = [];
 
   for (const sentence of sentences) {
-    const claim = claimFor(sentence, catalogue, today);
-    if (claim) claims.push(claim);
+    const found = claimsFor(sentence, catalogue, today);
+    if (found.length > 0) claims.push(...found);
     else rest.push(sentence);
   }
 
@@ -138,10 +200,30 @@ export function extractGoalClaims(
 }
 
 /**
- * At most one claim per sentence, first pattern wins.
+ * Which heading an unmatched sentence belongs under.
  *
- * Two deliberate departures from the brief's stated order, both because the
- * stated order makes a pattern unreachable:
+ * `context` when the sentence either opens with a short label ("Current
+ * split:", "Schedule:", "Gym:") or carries a scheduling cue ("2x per week",
+ * "every other day", "deload"). Everything else is an aim.
+ *
+ * Both of the owner's context lines match and their priorities line matches
+ * neither, which is the whole test. Nothing is reinterpreted either way — this
+ * only chooses a heading.
+ */
+export function restKind(sentence: string): RestKind {
+  if (/^[A-Za-z][A-Za-z ]{0,20}:/.test(sentence)) return "context";
+  if (SCHEDULE_CUE.test(sentence)) return "context";
+  return "aim";
+}
+
+const SCHEDULE_CUE =
+  /\b(\d+\s?x|\d+\s?times|per week|each week|every (day|week|other)|mon|tue|wed|thu|fri|sat|sun|split|schedule|rest day|deload)\b/i;
+
+/**
+ * The claims in one sentence. Usually none or one; two in exactly one case.
+ *
+ * Three deliberate departures from the brief's stated order, the first two
+ * because the stated order makes a pattern unreachable:
  *
  *  1. `run_time` is tested BEFORE `run_distance`. A time goal is a distance
  *     goal plus a clock, so testing the looser shape first would mean
@@ -152,24 +234,45 @@ export function extractGoalClaims(
  *     bodyweight cue ("up to") and a weight, and reading it as a bodyweight
  *     target would be exactly the confident-wrong-match failure this module
  *     exists to avoid.
+ *  3. A sentence that names a lift AND carries a rep count is `lift_reps` and
+ *     can never also be `lift`. This is a guard, not a preference. "10 weighted
+ *     pull ups with 45lb plate by May" read as a weight target makes 45 lb the
+ *     goal, and `gapFor` would then report an e1RM of 180 as `−135 lb`, tone
+ *     `good` — an unmet goal rendered as achieved. The rep count is checked
+ *     first and wins outright.
  */
-function claimFor(
+function claimsFor(
   sentence: string,
   catalogue: CatalogueExercise[],
   today: string,
-): GoalClaim | null {
+): GoalClaim[] {
   const byDate = dateIn(sentence, today);
   const exercise = matchExercise(sentence, catalogue);
 
   if (exercise === null && BODYWEIGHT_CUE.test(sentence)) {
     const lb = weightLbIn(sentence);
-    if (lb !== null) return { kind: "bodyweight", sentence, targetLb: lb, byDate };
+    if (lb !== null) return [{ kind: "bodyweight", sentence, targetLb: lb, byDate }];
   }
 
   if (exercise !== null) {
+    const reps = repsIn(sentence);
+    if (reps !== null) {
+      return [{
+        kind: "lift_reps",
+        sentence,
+        exerciseId: exercise.id,
+        exerciseName: exercise.name,
+        targetReps: reps,
+        // Unit-bearing only. A bare figure in a rep sentence is far more often
+        // another count ("3 sets of 10") than a load.
+        loadLb: unitWeightLbIn(sentence),
+        byDate,
+      }];
+    }
+
     const lb = weightLbIn(sentence);
     if (lb !== null) {
-      return {
+      const first: GoalClaim = {
         kind: "lift",
         sentence,
         exerciseId: exercise.id,
@@ -177,6 +280,19 @@ function claimFor(
         targetLb: lb,
         byDate,
       };
+
+      /*
+       * "Main lifts: 205 bench press by December, 225 by May" is two goals on
+       * one line, and the second one used to vanish silently. It is admitted
+       * only when the fragment carrying it also carries a month or an ISO date:
+       * without that guard "165x5, 165x5, 175x3" becomes four bench goals, and
+       * a set log pasted into the goals box would quietly become a target list.
+       */
+      const second = secondTarget(sentence, today);
+      if (second !== null) {
+        return [first, { ...first, targetLb: second.targetLb, byDate: second.byDate }];
+      }
+      return [first];
     }
   }
 
@@ -184,12 +300,72 @@ function claimFor(
   if (distanceMi !== null) {
     const targetSec = clockSecIn(sentence, distanceMi);
     if (targetSec !== null) {
-      return { kind: "run_time", sentence, distanceMi, targetSec, byDate };
+      return [{ kind: "run_time", sentence, distanceMi, targetSec, byDate }];
     }
-    return { kind: "run_distance", sentence, distanceMi, byDate };
+    return [{ kind: "run_distance", sentence, distanceMi, byDate }];
   }
 
-  return null;
+  return [];
+}
+
+/**
+ * A rep count in a sentence.
+ *
+ * The explicit form is tried first so "bench 5 reps at 225" reads 5 and not the
+ * 225 that `LEADING_REPS` could never reach anyway.
+ */
+export function repsIn(sentence: string): number | null {
+  const explicit = EXPLICIT_REPS.exec(sentence);
+  if (explicit) return Number(explicit[1]);
+
+  const leading = LEADING_REPS.exec(sentence);
+  return leading ? Number(leading[1]) : null;
+}
+
+/** The weight in a sentence, but only when it was written with its unit. */
+export function unitWeightLbIn(sentence: string): number | null {
+  const m = WEIGHT_WITH_UNIT.exec(sentence);
+  if (m === null) return null;
+  const value = Number(m[1]);
+  return Math.round(m[2].toLowerCase() === "kg" ? kgToLb(value) : value);
+}
+
+/**
+ * A second dated weight target in the same sentence, or nothing.
+ *
+ * Deliberately narrow: the second weight-shaped figure in source order, and
+ * only when a month or ISO date follows it. A third is not read — one comma is
+ * the pattern the owner writes and the one shape that has a test.
+ */
+function secondTarget(
+  sentence: string,
+  today: string,
+): { targetLb: number; byDate: string } | null {
+  const hits = weightHits(sentence);
+  if (hits.length < 2) return null;
+
+  const fragment = sentence.slice(hits[1].index);
+  const byDate = dateIn(fragment, today);
+  if (byDate === null) return null;
+
+  return { targetLb: hits[1].lb, byDate };
+}
+
+function weightHits(sentence: string): { lb: number; index: number }[] {
+  const re = new RegExp(WEIGHT_SCAN.source, "gi");
+  const hits: { lb: number; index: number }[] = [];
+
+  for (let m = re.exec(sentence); m !== null; m = re.exec(sentence)) {
+    const after = sentence[m.index + m[0].length];
+    // Part of a clock, not a weight. `1:50` offers "50" and nothing else does.
+    if (sentence[m.index - 1] === ":" || after === ":") continue;
+
+    const value = Number(m[1]);
+    const kg = m[2] !== undefined && m[2].toLowerCase() === "kg";
+    hits.push({ lb: Math.round(kg ? kgToLb(value) : value), index: m.index });
+  }
+
+  return hits;
 }
 
 /**
@@ -201,11 +377,8 @@ function claimFor(
  * 1:50" offers up "50" as a plausible two-digit weight.
  */
 export function weightLbIn(sentence: string): number | null {
-  const united = WEIGHT_WITH_UNIT.exec(sentence);
-  if (united) {
-    const value = Number(united[1]);
-    return Math.round(united[2].toLowerCase() === "kg" ? kgToLb(value) : value);
-  }
+  const united = unitWeightLbIn(sentence);
+  if (united !== null) return united;
 
   const bare = BARE_WEIGHT.exec(sentence.replace(new RegExp(CLOCK.source, "g"), " "));
   return bare ? Math.round(Number(bare[1])) : null;
@@ -250,12 +423,19 @@ export function clockSecIn(sentence: string, distanceMi: number): number | null 
  * That last part is a real cost: "bench 225" produces no claim and lands in
  * `rest`. It is the right cost. The alternative is a fuzzy match, and a gap
  * computed against the wrong lift is a number the owner would act on.
+ *
+ * ONE widening, added after the owner's "10 weighted pull ups with 45lb plate
+ * by May" matched nothing: the sentence's word set also carries a singular form
+ * of each of its own plural tokens, so "ups" reaches "Weighted Pull-Up" and
+ * "curls" reaches "Preacher Curl". The catalogue side is untouched and the
+ * every-token rule still holds — this adds words to the haystack, it does not
+ * relax the needle, so no sentence matches a name it does not contain.
  */
 export function matchExercise(
   sentence: string,
   catalogue: CatalogueExercise[],
 ): CatalogueExercise | null {
-  const words = new Set(tokenize(sentence));
+  const words = withSingulars(tokenize(sentence));
   let best: { exercise: CatalogueExercise; matched: number } | null = null;
 
   for (const exercise of catalogue) {
@@ -271,6 +451,23 @@ export function matchExercise(
   }
 
   return best?.exercise ?? null;
+}
+
+/**
+ * The tokens, plus a one-trailing-`s`-dropped form of each.
+ *
+ * The floor is three characters rather than the four the brief named, because
+ * the case that motivated the whole change is "ups" → "up": at four, the one
+ * sentence this exists for still matches nothing. Three keeps "as", "is" and
+ * "us" from becoming single letters, which is where it would stop being
+ * singularisation and start being fuzz.
+ */
+function withSingulars(tokens: string[]): Set<string> {
+  const words = new Set(tokens);
+  for (const t of tokens) {
+    if (t.length >= 3 && t.endsWith("s")) words.add(t.slice(0, -1));
+  }
+  return words;
 }
 
 /**
@@ -292,8 +489,10 @@ export function dateIn(sentence: string, today: string): string | null {
     const m = monthPattern(MONTHS[i]).exec(lower);
     if (!m) continue;
     // "may" is also an ordinary English verb, and "I may add a deload" is not a
-    // deadline. It only counts with a year or a day number after it.
-    if (MONTHS[i] === "may" && m[1] === undefined && !/\bmay\s+\d/.test(lower)) continue;
+    // deadline. It counts with a year or a day number after it, or with a
+    // preposition in front — which is the owner's own form, twice ("225 by
+    // May", "45lb plate by May"), and which no modal use of the word takes.
+    if (MONTHS[i] === "may" && m[1] === undefined && !MAY_AS_MONTH.test(lower)) continue;
     // The earliest month *in the sentence*, not the earliest in the calendar:
     // iterating MONTHS would otherwise let a stray "January" outrank the
     // "March" the owner actually wrote.

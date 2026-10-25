@@ -24,6 +24,27 @@ const styles = StyleSheet.create({
   },
   subtitle: { color: color.muted, fontSize: 13, marginTop: space.xs, lineHeight: 18 },
   body: { flex: 1 },
+
+  /**
+   * The opaque strip the status bar sits on.
+   *
+   * The scroll variant's top inset is `contentContainerStyle` padding, which
+   * positions the content on first paint and then does nothing: scroll it and
+   * the content travels up through the inset and renders *behind* the clock and
+   * the battery, which have no background of their own. On the owner's phone
+   * that read as "Barbell Bench Press" colliding with 11:36 and "144 lb"
+   * colliding with the time.
+   *
+   * So the inset is also painted. A sibling of the `ScrollView` rather than a
+   * header inside it, because it must not scroll and must not consume layout —
+   * the padding already reserves the space, and this only covers it.
+   *
+   * `pointerEvents="none"` so a tap near the top of the screen still reaches
+   * whatever is under it, and ground rather than a blur: this app is dark-only,
+   * `expo-glass-effect` would make a 20pt strip the one thing on the phone that
+   * needs a native module, and an opaque strip cannot fail to load.
+   */
+  statusCover: { position: "absolute", left: 0, right: 0, top: 0, backgroundColor: color.ground },
 });
 
 /**
@@ -92,27 +113,38 @@ export function Screen({
   }
 
   return (
-    <ScrollView
-      style={styles.root}
-      contentContainerStyle={[
-        styles.gutter,
-        { paddingTop: insets.top + space.md, paddingBottom: SCROLL_BOTTOM_INSET + insets.bottom },
-      ]}
-      // The insets above are computed here; letting iOS also apply its own
-      // would double the top gap on a notched phone.
-      contentInsetAdjustmentBehavior="never"
-      // So that tapping a button while the coach's keyboard is up acts on the
-      // button instead of being swallowed by the dismiss.
-      keyboardShouldPersistTaps="handled"
-      keyboardDismissMode="on-drag"
-      refreshControl={
-        onRefresh
-          ? <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={color.muted} />
-          : undefined
-      }
-    >
-      {header}
-      {children}
-    </ScrollView>
+    <View style={styles.root}>
+      <ScrollView
+        style={styles.root}
+        contentContainerStyle={[
+          styles.gutter,
+          {
+            paddingTop: insets.top + space.md,
+            paddingBottom: SCROLL_BOTTOM_INSET + insets.bottom,
+          },
+        ]}
+        // The insets above are computed here; letting iOS also apply its own
+        // would double the top gap on a notched phone.
+        contentInsetAdjustmentBehavior="never"
+        // So that tapping a button while the coach's keyboard is up acts on the
+        // button instead of being swallowed by the dismiss.
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        refreshControl={
+          onRefresh
+            ? <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={color.muted} />
+            : undefined
+        }
+      >
+        {header}
+        {children}
+      </ScrollView>
+
+      {/*
+        Last child, so it paints over the scrolled content. Zero-height on a
+        device with no top inset, where there is nothing to cover.
+      */}
+      <View pointerEvents="none" style={[styles.statusCover, { height: insets.top }]} />
+    </View>
   );
 }

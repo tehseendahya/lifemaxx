@@ -2,23 +2,56 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 
 import {
-  BarSeries, Button, Card, Chart, Empty, Label, Screen, Sparkline, Spinner, Stat,
-  color, hit, microLabel, space, tnum,
+  BarSeries, Button, Card, Chart, Empty, Label, RangeBar, Screen, Sparkline, Spinner,
+  Stat, color, hit, microLabel, space, tnum,
 } from "@/components/ui";
 import { tapSelect } from "@/lib/haptics";
 
 import { NavLine } from "./NavLine";
 import { buildTodayModel } from "./model";
-import type { GoalRow, IntakePanel, LoadBlock, StrengthRow, WeightPanel } from "./model";
+import type { IntakePanel, StrengthRow, TargetRow, WeightPanel } from "./model";
 import { useBootstrap } from "./useBootstrap";
 import { verdict } from "./verdict";
+import { volumeBlock } from "./volume";
+import type { LiftDayCell, LiftDayGrid, VolumeBlock, VolumeRow } from "./volume";
 
 /** Panel heights. Fixed; only the widths are measured. */
 const WEIGHT_H = 76;
 const INTAKE_H = 56;
 const SPARK_H = 32;
-const SETS_H = 60;
 const MILES_H = 20;
+
+/**
+ * The sets-per-muscle row's two fixed columns. The label column's width is also
+ * the axis row's left inset, so the `0 / 10 / 20` sit under the track they
+ * describe rather than under the muscle names.
+ */
+const LABEL_W = 96;
+const VALUE_W = 36;
+
+/** One cell of the lift-day grid. 10pt is legible and 56 of them fit a card. */
+const CELL_H = 10;
+
+/**
+ * How many tracked targets the dashboard shows.
+ *
+ * Three, because this is a glance and the full list — with each target's own
+ * sentence under it as provenance — is one tap away on You. The NavLine says
+ * which of the two it is going to.
+ */
+const TODAY_GOAL_ROWS = 3;
+
+/** React Native takes a percentage string verbatim. */
+const leftPct = (fraction: number): `${number}%` =>
+  `${Math.max(0, Math.min(1, fraction)) * 100}%`;
+
+const CELL_FILL: Record<LiftDayCell["state"], string> = {
+  lifted: color.accent,
+  past: color.line,
+  // A day that has not happened yet draws nothing at all. Grey would read as a
+  // day the owner failed to train, which is the one thing it is not.
+  future: "transparent",
+};
 
 const styles = StyleSheet.create({
   pressed: { opacity: 0.7 },
@@ -100,6 +133,79 @@ const styles = StyleSheet.create({
    */
   soFar: { ...microLabel, textAlign: "right" },
 
+  /* ---------------------------------------- sets per muscle, and lift days */
+
+  /*
+   * The two sentences that answer "what's the y axis". 12pt muted rather than
+   * a `Label`, because it is a sentence and not a micro-label, and it is always
+   * rendered — including in both empty states, where the owner is most likely
+   * to be reading the card for the first time.
+   */
+  explain: { color: color.muted, fontSize: 12, lineHeight: 18, marginBottom: space.md },
+
+  /*
+   * ONE axis row per card, inset to the track. Eighteen copies of "0 10 20" is
+   * precisely the noise the chart this replaced had.
+   */
+  axisRow: {
+    height: 14,
+    marginLeft: LABEL_W + space.sm,
+    marginRight: VALUE_W + space.sm,
+    marginBottom: space.xs,
+  },
+  /*
+   * Each tick label is a 24pt box centred on its fraction, rather than
+   * left-aligned at it. At `100%` a left-aligned label would start past the
+   * track's right edge; centred, it sits over the edge it names. The 12pt of
+   * overhang at either end falls inside the label column and the value column,
+   * both of which are wider than that.
+   */
+  axisTick: {
+    ...microLabel,
+    ...tnum,
+    position: "absolute",
+    width: 24,
+    marginLeft: -12,
+    textAlign: "center",
+  },
+
+  volumeRow: { height: 28, flexDirection: "row", alignItems: "center" },
+  volumeLabel: { width: LABEL_W, color: color.ink, fontSize: 13 },
+  volumeTrack: {
+    flex: 1,
+    marginHorizontal: space.sm,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  /*
+   * Always one decimal, always tabular. A column of `7`, `3.5`, `17.5` with
+   * proportional digits does not line up, and the comparison between rows is
+   * the entire content of this panel.
+   */
+  volumeValue: {
+    width: VALUE_W,
+    ...tnum,
+    color: color.ink,
+    fontSize: 13,
+    textAlign: "right",
+  },
+  volumeFooter: { color: color.muted, fontSize: 13, lineHeight: 19, marginTop: space.sm },
+
+  panelHead: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+    gap: space.md,
+    marginTop: space.lg,
+    marginBottom: space.sm,
+  },
+  panelEnd: { ...microLabel, ...tnum },
+
+  gridHead: { flexDirection: "row", marginBottom: space.xs },
+  gridHeadCell: { ...microLabel, flex: 1, textAlign: "center" },
+  gridRow: { flexDirection: "row", marginBottom: 4 },
+  gridCell: { flex: 1, height: CELL_H, borderRadius: 2, marginHorizontal: 2 },
+
   consistency: {
     flexDirection: "row",
     alignItems: "flex-end",
@@ -128,7 +234,9 @@ const styles = StyleSheet.create({
  *               the one measurement no other tab shows at all.
  *   GOALS       what the owner wrote down, and the arithmetic distance to it.
  *   STRENGTH    whether the lifts are actually moving.
- *   LOAD        whether the work is going in, week over week.
+ *   VOLUME      where this week's sets landed per muscle, against the range —
+ *               and eight weeks of lift days beneath it.
+ *   RUN MILES   eight weeks of mileage, in its own card and its own unit.
  *
  * And above all of them, one sentence that says what to do in the next hour,
  * because four concepts of equal weight is soup: one has to be the headline.
@@ -184,6 +292,12 @@ export default function TodayScreen() {
   const m = buildTodayModel(data);
   const call = verdict(data);
   const t = m.trajectory;
+  /*
+   * Called here rather than folded into `buildTodayModel`, for the same reason
+   * `verdict()` is: `volume.ts` imports the date helpers and `LOAD_WEEKS` from
+   * `model.ts`, so calling it from there would make the two mutually dependent.
+   */
+  const vol = volumeBlock(data);
 
   return (
     <Screen
@@ -278,27 +392,23 @@ export default function TodayScreen() {
 
         {m.goals.empty !== null && <Text style={styles.muted}>{m.goals.empty}</Text>}
 
-        {m.goals.rows.map((row, i) => (
+        {/*
+          Targets only, three at most. The aims and the split/schedule context
+          that `goalsBlock` also carries are deliberately not here: Today is the
+          dashboard and wants the tracked numbers, and the three-tier reading
+          view — targets, what else they are working on, what the coach knows —
+          lives on You, where the text is also edited. Two screens rendering the
+          same prose two ways is how they come to disagree about it.
+        */}
+        {m.goals.targets.slice(0, TODAY_GOAL_ROWS).map((row, i) => (
           <GoalLine key={row.key} row={row} divided={i > 0} />
         ))}
 
         {m.goals.note !== null && <Text style={styles.muted}>{m.goals.note}</Text>}
 
-        {m.goals.rest.length > 0 && (
-          <View style={{ marginTop: space.md }}>
-            <Label>Also in your goals</Label>
-            {/*
-              Verbatim, with no figure beside them. This is the honest half of
-              the card: the app shows it has read the text without claiming it
-              understood it.
-            */}
-            {m.goals.rest.map((line, i) => (
-              <Text key={i} style={styles.restLine}>{line}</Text>
-            ))}
-          </View>
-        )}
-
-        <NavLine onPress={goYou}>Edit goals →</NavLine>
+        <NavLine onPress={goYou}>
+          {m.goals.targets.length > TODAY_GOAL_ROWS ? "All your goals →" : "Edit goals →"}
+        </NavLine>
       </Card>
 
       <Card>
@@ -323,13 +433,79 @@ export default function TodayScreen() {
         )}
       </Card>
 
+      {/*
+        What used to be here was labelled "Weekly hard sets" and drew eight
+        weekly buckets of whole working sets, muscle-blind, with no y number
+        anywhere on the card. The owner's complaint was exact — "I don't get
+        this weekly hard sets thing. What's the y axis." Two panels replace it:
+        sets per muscle against the productive range, which is the shape the
+        ranking the whole app runs on already uses, and a calendar of lift days,
+        which has no y axis to misread. Run miles moved to a card of their own,
+        because one unit per card is the whole reason either can be read.
+      */}
       <Card>
-        <Label>Weekly hard sets</Label>
-        {m.load.empty ? (
-          <Text style={styles.muted}>Nothing logged in eight weeks.</Text>
+        <Label>Sets per muscle · last 7 days</Label>
+        <Text style={styles.explain}>{vol.explainer}</Text>
+
+        {vol.note !== null ? (
+          <Text style={styles.muted}>{vol.note}</Text>
         ) : (
-          <LoadCharts load={m.load} />
+          <>
+            <View style={styles.axisRow}>
+              {/* Keyed by index: three fixed ticks, and a band whose lower edge
+                  sat at zero would give two of them the same label. */}
+              {vol.ticks.map((tick, i) => (
+                <Text
+                  key={i}
+                  style={[styles.axisTick, { left: leftPct(tick.fraction) }]}
+                >
+                  {tick.label}
+                </Text>
+              ))}
+            </View>
+
+            {vol.rows.map((row) => (
+              <MuscleRow key={row.muscle} row={row} block={vol} />
+            ))}
+
+            {vol.footer !== null && (
+              <Text style={styles.volumeFooter}>{vol.footer}</Text>
+            )}
+          </>
         )}
+
+        {vol.grid !== null && <LiftDays grid={vol.grid} />}
+
+        <NavLine onPress={goLift}>{vol.navLabel}</NavLine>
+      </Card>
+
+      <Card>
+        <Label>Run miles · 8 weeks</Label>
+        {m.load.empty ? (
+          <Text style={styles.muted}>No runs logged in eight weeks.</Text>
+        ) : (
+          <Chart
+            height={MILES_H}
+            left={m.load.xLabels.left}
+            right={m.load.xLabels.right}
+          >
+            {(width, height) => (
+              <BarSeries
+                values={m.load.runMiles}
+                tone="muted"
+                partialIndex={m.load.partialIndex}
+                width={width}
+                height={height}
+              />
+            )}
+          </Chart>
+        )}
+        {/*
+          `BarSeries` draws the incomplete bucket at 70% and leaves the caller
+          to say why. The current week is a Tuesday being compared against seven
+          complete weeks, which is the easiest false signal on this screen.
+        */}
+        {!m.load.empty && <Text style={styles.soFar}>So far</Text>}
         <NavLine onPress={goRuns}>See the running week →</NavLine>
       </Card>
 
@@ -423,7 +599,7 @@ function IntakeChart({ panel }: { panel: IntakePanel }) {
   );
 }
 
-function GoalLine({ row, divided }: { row: GoalRow; divided: boolean }) {
+function GoalLine({ row, divided }: { row: TargetRow; divided: boolean }) {
   const tone = row.gap.tone === "good"
     ? color.good
     : row.gap.tone === "muted" ? color.muted : color.ink;
@@ -431,7 +607,12 @@ function GoalLine({ row, divided }: { row: GoalRow; divided: boolean }) {
   return (
     <View style={[styles.goalRow, divided && styles.divided]}>
       <View style={styles.goalHead}>
-        <Text style={styles.goalSentence} numberOfLines={1}>{row.sentence}</Text>
+        {/*
+          The derived headline rather than the owner's sentence. The sentence is
+          the provenance line on the You card, where there is room for it under
+          a four-line block; here one line has to carry the target itself.
+        */}
+        <Text style={styles.goalSentence} numberOfLines={1}>{row.headline}</Text>
         {row.deadline !== null && (
           <Text
             style={[
@@ -488,48 +669,74 @@ function StrengthLine(
 }
 
 /**
- * Eight weeks of working sets, and the same eight weeks of run mileage.
+ * One muscle's week against the productive range.
  *
- * Two panels, not two series on one. Sets and miles share no unit and no scale,
- * and the only thing a second y-axis would add is a crossing point that reads
- * as a finding.
+ * A meter and not a bar chart, and the distinction is the whole fix. A bar
+ * chart's height means something only once you know its axis, which is what the
+ * owner could not find. Here the comparison is drawn into the mark itself: the
+ * band IS the answer, the fill is where this muscle sits in it, and the figure
+ * on the right is the number without having to read either.
+ *
+ * Non-interactive on purpose. The question "which lifts would fix this" is
+ * answered on the Lift tab by the card that names and ranks what is owed, which
+ * the NavLine at the foot of this card goes to — eighteen tappable rows each
+ * leading somewhere slightly different is how a dashboard becomes a menu.
  */
-function LoadCharts({ load }: { load: LoadBlock }) {
+function MuscleRow({ row, block }: { row: VolumeRow; block: VolumeBlock }) {
+  return (
+    <View style={styles.volumeRow}>
+      <Text style={styles.volumeLabel} numberOfLines={1}>{row.label}</Text>
+      <View style={styles.volumeTrack}>
+        <RangeBar
+          value={row.sets}
+          min={block.min}
+          max={block.max}
+          domainMax={block.domainMax}
+          status={row.status}
+        />
+      </View>
+      <Text style={styles.volumeValue}>{row.value}</Text>
+    </View>
+  );
+}
+
+/**
+ * Eight weeks of "did I lift", as a calendar.
+ *
+ * Deliberately not a `Chart`: it has no measured width, no SVG and no y axis to
+ * misread, which is exactly why it is the right panel for an owner who could
+ * not read the bar chart it replaced. A cell is a day. It is filled or it is
+ * not.
+ *
+ * With one logged session this is one filled cell in fifty-six and the weekday
+ * header says which day — legible, honest, and the one thing on the card that
+ * visibly improves every week.
+ */
+function LiftDays({ grid }: { grid: LiftDayGrid }) {
   return (
     <>
-      <Chart
-        label="Sets"
-        height={SETS_H}
-        left={load.xLabels.left}
-        right={load.medianLabel ?? undefined}
-      >
-        {(width, height) => (
-          <BarSeries
-            values={load.hardSets}
-            reference={load.median > 0 ? load.median : null}
-            partialIndex={load.partialIndex}
-            width={width}
-            height={height}
-          />
-        )}
-      </Chart>
-      {/*
-        The current week is seven days of comparison against a Tuesday, which is
-        the easiest false signal on this screen — hence the 70% bar and this.
-      */}
-      <Text style={styles.soFar}>So far</Text>
+      <View style={styles.panelHead}>
+        <Label style={{ marginBottom: 0 }}>Lift days · 8 weeks</Label>
+        <Text style={styles.panelEnd}>{grid.rightLabel}</Text>
+      </View>
 
-      <Chart label="Run miles" height={MILES_H} right={load.xLabels.right}>
-        {(width, height) => (
-          <BarSeries
-            values={load.runMiles}
-            tone="muted"
-            partialIndex={load.partialIndex}
-            width={width}
-            height={height}
-          />
-        )}
-      </Chart>
+      <View style={styles.gridHead}>
+        {grid.weekdays.map((d, i) => (
+          // Keyed by index: three of the seven initials repeat.
+          <Text key={i} style={styles.gridHeadCell}>{d}</Text>
+        ))}
+      </View>
+
+      {grid.weeks.map((week) => (
+        <View key={week[0].date} style={styles.gridRow}>
+          {week.map((cell) => (
+            <View
+              key={cell.date}
+              style={[styles.gridCell, { backgroundColor: CELL_FILL[cell.state] }]}
+            />
+          ))}
+        </View>
+      ))}
     </>
   );
 }

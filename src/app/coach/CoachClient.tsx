@@ -2,15 +2,26 @@
 import { useState } from "react";
 import { Screen, Card, Label } from "@/components/ui";
 
+/**
+ * Starters, ordered so the first two need no history at all.
+ *
+ * "Why did I stall last week?" was in this list and is unanswerable on an empty
+ * log — a chip that reliably produces a non-answer is worse than no chip. These
+ * two lead because a brand-new account can get a real answer out of them from
+ * the goals text alone, which is the whole point of the coach no longer
+ * refusing.
+ */
 const SUGGESTED = [
+  "Is my plan going to get me to 205 bench by December?",
+  "Which of my goals am I trading against?",
   "Am I actually progressing on bench, or just adding volume?",
   "What should I eat tonight to hit protein?",
-  "Which of my goals am I trading against right now?",
-  "Why did I stall last week?",
 ];
 
-export function CoachClient({ loggedDays, history }: {
+export function CoachClient({ loggedDays, coverageNote, history }: {
   loggedDays: number;
+  /** Set when some stream is thin; see `coachCoverageNote`. */
+  coverageNote: string | null;
   history: { role: string; content: string }[];
 }) {
   const [messages, setMessages] = useState(history);
@@ -51,13 +62,9 @@ export function CoachClient({ loggedDays, history }: {
 
   return (
     <Screen title="Coach" subtitle={`Reading ${loggedDays} logged day${loggedDays === 1 ? "" : "s"}`}>
-      {loggedDays < 5 && (
+      {coverageNote !== null && (
         <Card className="mb-4">
-          <p className="text-sm text-muted">
-            Only {loggedDays} day{loggedDays === 1 ? "" : "s"} logged so far. The coach will say
-            when the data is too thin to call rather than guessing — log a few more days
-            and the answers get sharper.
-          </p>
+          <p className="text-sm text-muted">{coverageNote}</p>
         </Card>
       )}
 

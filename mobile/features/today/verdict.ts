@@ -35,8 +35,32 @@ export interface Verdict {
   tone: VerdictTone;
 }
 
-/** Below this, the app says the data is too thin rather than guessing. */
-export const MIN_LIFT_DAYS = 5;
+/**
+ * Lift days below which the screen has nothing to rank, so it says so.
+ *
+ * This was 5, matching the coach prompt's old refusal rule, and it was wrong
+ * here for a different reason than it was wrong there. The coach was refusing
+ * questions that needed no history; this line was suppressing the one output
+ * the app exists to produce, for the whole of a new user's first month. With a
+ * single logged day the owner saw "Not enough data to call it — 1 lift day in
+ * four weeks" instead of "Chest is 10 sets short this week. Train chest."
+ *
+ * The distinction that decides it: volume debt is a COUNT, not a trend. Sets
+ * per muscle over the last seven days is exact after one session — it is a
+ * subtraction against `WEEKLY_SET_TARGET`, not an inference from a sample — so
+ * there is no noise to pattern-match on and nothing to be thin about. Rungs 4
+ * and 5 are therefore honest from day one.
+ *
+ * At zero days there is genuinely nothing: every muscle sits at 0 sets with a
+ * null last-trained date, so `score` ties across all eighteen and whichever one
+ * the server happened to sort first would be presented as a decision. That is
+ * the only case this rung is for.
+ *
+ * Trend claims on this screen are gated separately and still need a real
+ * sample — see the load chart and `estimateTdee`'s own floors. The coach's
+ * five-day trend threshold lives in `THIN_SAMPLE_DAYS`.
+ */
+export const MIN_LIFT_DAYS = 1;
 /** The window `MIN_LIFT_DAYS` is counted over. */
 export const LIFT_DAY_WINDOW = 28;
 /** A muscle below this score is not meaningfully owed sets. */
@@ -70,12 +94,18 @@ export function verdict(b: Bootstrap): Verdict {
    */
   const top = ranked.length > 0 ? ranked[0] : null;
 
-  // ---- 1. Thin data. The same rule the coach prompt follows: say so, stop.
+  /*
+   * ---- 1. Nothing logged at all.
+   *
+   * Written as an empty state, not as a failure: what is missing, what appears
+   * once it is there, and one action. No error tone, because an account on its
+   * first day has done nothing wrong.
+   */
   const liftDays = liftDaysIn(b.history.days, b.today, LIFT_DAY_WINDOW);
   if (liftDays < MIN_LIFT_DAYS) {
     return {
-      text: `Not enough data to call it — ${plural(liftDays, "lift day")} in four weeks. `
-        + "Log a session and this gets useful.",
+      text: "No sessions logged in four weeks. Log one and this line names the muscle "
+        + "you owe the most sets to.",
       tone: "ink",
     };
   }
