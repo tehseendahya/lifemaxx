@@ -440,43 +440,80 @@ it, and serves it from EAS. Expo Go can open your own project's published
 updates, so the laptop-free path still exists — it is just a different command
 and a different set of rules.
 
-### The trap: do not add `runtimeVersion`
+### The trap: the runtime version has to be Expo Go's
 
-Every EAS Update guide tells you to set `runtimeVersion` in `app.json`. **Do
-not do that here.** An update published with a `runtimeVersion` cannot be
-loaded by Expo Go at all — it requires a development build with
-`expo-dev-client`, which means a native build and an Apple Developer account,
-which is the thing this project deliberately avoids.
+**An earlier version of this section said to leave `runtimeVersion` out. That
+was wrong, and following it fails.** `eas update` calls
+`ensureEASUpdateIsConfiguredAsync` on every publish, and that function writes a
+`runtimeVersion` into `app.json` whenever there isn't one — defaulting to
+`{ "policy": "appVersion" }` for SDK 49 and later. That resolves to `"0.1.0"`,
+and Expo Go will not load an update tagged `"0.1.0"`: it only loads updates
+tagged with its own runtime, `exposdk:58.0.0`.
 
-`app.json` therefore has no `runtimeVersion` on purpose. Expo Go falls back to
-matching on the SDK version, which is what makes it able to open the bundle.
-If a future guide, or a tool's `--fix`, adds that field, the Expo Go path dies
-quietly: the QR scans, and the update simply never loads.
+So `app.json` sets it explicitly, to the one policy that resolves to Expo Go's
+runtime:
 
-`expo-updates` is likewise not in `package.json`. It ships inside the Expo Go
-binary, and most of its API (`reloadAsync`, `setExtraParamAsync`,
-`getExtraParamsAsync`) is a no-op in Expo Go regardless, so installing it buys
-nothing here and adds a native module to the dependency gate for no reason.
+```json
+"runtimeVersion": { "policy": "sdkVersion" }
+```
+
+`@expo/config-plugins` resolves that through `getRuntimeVersionForSDKVersion`
+to `exposdk:58.0.0`, and because the field is now set, `eas update` leaves it
+alone. Check it any time with:
+
+```bash
+node -e "require('@expo/config-plugins').Updates.getRuntimeVersionNullableAsync(process.cwd(), require('@expo/config').getConfig(process.cwd()).exp, 'ios').then(console.log)"
+```
+
+If a tool, a guide or `eas update:configure` changes it to `appVersion` or
+`fingerprint`, the Expo Go path dies quietly: the QR scans and the update
+never loads. Those policies are for development and store builds, which this
+project does not use.
+
+`expo-updates` **is** in `package.json` — `eas update` installs it on first
+run regardless. It is in Expo Go's bundled native modules (`~58.0.18`), so it
+does not break the Expo Go dependency gate.
+
+### The API URL has to be deployed, not your laptop
+
+`EXPO_PUBLIC_*` values are inlined into the bundle when it is exported. If
+`EXPO_PUBLIC_API_BASE_URL` is a LAN address like `http://192.168.x.x:3000`, the
+published app calls your laptop for every request and fails whenever it is off
+— the exact thing publishing is meant to avoid.
+
+`eas update` exports in production mode, and Expo loads `.env.production` over
+`.env` in that mode. So:
+
+- `mobile/.env` — your laptop's LAN URL, for `npx expo start`
+- `mobile/.env.production` — the deployed Vercel URL, for `npm run publish`
+
+Both are gitignored. The production file only needs the one line:
+
+```bash
+EXPO_PUBLIC_API_BASE_URL=https://lifemaxx-tehseendahyas-projects.vercel.app
+```
+
+The Supabase values fall through from `.env`. **The deployment it points at
+must include the `/api/mobile/*` routes** — they are not on `main` until this
+branch is merged, and the production alias 404s them until then.
 
 ### Doing it
 
-These have to run on your machine, not in a cloud session — `api.expo.dev` and
-`u.expo.dev` are blocked by this environment's egress policy, which is also why
-none of this is verified end to end from here.
-
 ```bash
 cd mobile
-npx eas-cli@latest login          # your Expo account
-npx eas-cli@latest init           # creates the EAS project; writes extra.eas.projectId
-npx eas-cli@latest update --branch main --message "what changed"
+npx eas-cli@latest login      # once
+npx eas-cli@latest init       # once; already done for @tehseendahya/lifemaxx
+npm run publish               # every time you want changes on the phone
 ```
 
-`init` is the step that adds `extra.eas.projectId` to `app.json` — it is left
-out of version control here because it is specific to your account, not to the
-project.
+`npm run publish` is
+`npx eas-cli@latest update --branch main --environment production --non-interactive --message "<last commit subject>"`.
+`--environment` is required from SDK 55. `npx eas-cli@latest` rather than a
+bare `eas`, because the CLI is not a dependency and is usually not installed
+globally — a bare `eas` fails with "command not found".
 
-The `update` command prints a URL and a QR code. Scan it with Expo Go and the
-app runs with no dev server and no laptop.
+The project is linked: `extra.eas.projectId` and `owner` in `app.json` are
+committed, since this repository has one owner.
 
 ### Answering the second half of the question
 
