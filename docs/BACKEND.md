@@ -171,7 +171,9 @@ active subscription to create an API application.
   [strava.com/settings/api](https://www.strava.com/settings/api). The
   Authorization Callback Domain is the bare deployment domain. Set
   `STRAVA_CLIENT_ID` and `STRAVA_CLIENT_SECRET`, redeploy, then connect from
-  Settings. Activities pull nightly.
+  **You → Connections** in the app (phone or laptop). The OAuth `state` is
+  signed with `STRAVA_STATE_SECRET`, falling back to `CRON_SECRET`.
+  Activities pull nightly.
 - *Without one:* request the account archive (**Settings → My Account →
   Download or Delete Your Account**), then run
   `npm run runs:import -- ~/Downloads/export_12345 --dry-run`, and again

@@ -78,16 +78,21 @@ Install **Expo Go** from the App Store and sign in with your Expo account.
 ### 5. Running things locally
 
 ```bash
-npm run dev                  # API on http://localhost:3000 (production DB)
-cd mobile && npx expo start  # client: QR for the phone, press w for web
+# Laptop web against a local API (two terminals)
+MOBILE_CORS_ORIGINS=http://localhost:8081 npm run dev   # API on :3000 (production DB)
+npm run dev:web                                          # Expo web on :8081, calling :3000
+
+# Phone
+cd mobile && npx expo start   # scan the QR in Expo Go
 ```
 
-The client calls whatever `EXPO_PUBLIC_API_BASE_URL` says. That's normally
-the production deploy, and it can be changed on the phone under **You →
-Connection** (use your laptop's LAN IP, not `localhost`). To point Expo web on
-`localhost:8081` at a local API, set `MOBILE_CORS_ORIGINS=http://localhost:8081`
-in `.env.local`. To see the real laptop build with everything on one origin, run
-`npm run build && npm start`.
+The phone calls whatever `EXPO_PUBLIC_API_BASE_URL` says. That's normally the
+production deploy, and it can be changed on the phone under **You →
+Connection** (use your laptop's LAN IP, not `localhost`). On the deployed site
+the web app calls its own origin, so production and previews need no CORS. To
+see the real laptop build with everything on one origin, run
+`npm run build && npm start`. `npm run build` needs some `DATABASE_URL`;
+`.env.local` provides it.
 
 Anything you do in a locally running app writes to production as **you**. Use
 it as you would the real app, and don't create junk accounts or fake entries.
