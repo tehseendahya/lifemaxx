@@ -148,6 +148,17 @@ export async function signIn(email: string, password: string): Promise<void> {
   if (error) throw new Error(humanise(error.message));
 }
 
+/**
+ * Email a password-reset link. `redirectTo` comes from `passwordResetRedirect`
+ * in `features/settings/model.ts`; it has to be in the Supabase project's
+ * allowed redirect URLs, as the web app's reset already required.
+ */
+export async function requestPasswordReset(email: string, redirectTo: string): Promise<void> {
+  assertConfigured();
+  const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo });
+  if (error) throw new Error(humanise(error.message));
+}
+
 export async function signUp(email: string, password: string): Promise<void> {
   assertConfigured();
   const { data, error } = await supabase.auth.signUp({ email: email.trim(), password });

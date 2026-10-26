@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { ComponentRef } from "react";
-import { Modal, StyleSheet, Text, TextInput, View } from "react-native";
+import { StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { Button, color, hit, radius, space } from "@/components/ui";
+import { Button, Overlay, color, hit, radius, space } from "@/components/ui";
 import { tapSelect } from "@/lib/haptics";
 
 const styles = StyleSheet.create({
@@ -139,7 +139,7 @@ export function TextPrompt({
   const problem = validate === undefined ? null : validate(text);
 
   return (
-    <Modal visible transparent={false} animationType="slide" onRequestClose={onCancel}>
+    <Overlay visible onRequestClose={onCancel}>
       <View style={[styles.root, { paddingTop: insets.top + space.md }]}>
         <View style={styles.head}>
           <Text style={styles.title}>{title}</Text>
@@ -200,6 +200,6 @@ export function TextPrompt({
           </Button>
         )}
       </View>
-    </Modal>
+    </Overlay>
   );
 }

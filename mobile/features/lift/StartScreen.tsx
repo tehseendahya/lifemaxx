@@ -1,9 +1,9 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 
 import {
-  Button, Card, Chart, Label, Screen, Sheet, Sparkline,
+  Button, Card, Chart, Columns, Label, Overlay, Screen, Sheet, Sparkline,
   color, hit, microLabel, space, tnum,
 } from "@/components/ui";
 import { QuickLog } from "@/features/voice";
@@ -186,113 +186,85 @@ export function StartScreen({
       onRefresh={onRefresh}
     >
       <View style={styles.body}>
-        {/* The action block. Bare views, not a Card: it is the action, not content. */}
-        <Button
-          size="hero"
-          onPress={() => {
-            tapSelect();
-            void onStart();
-          }}
-        >
-          START LIFT
-        </Button>
-
-        {gyms.length > 0 ? (
-          <Pressable
-            onPress={() => {
-              tapSelect();
-              setPicking(true);
-            }}
-            accessibilityRole="button"
-            accessibilityLabel={`Gym: ${gym?.name ?? "none"}. Tap to change.`}
-            style={({ pressed }) => [styles.gym, pressed && styles.gymPressed]}
-          >
-            <Text style={styles.gymText}>{gym?.name ?? "Pick a gym"}</Text>
-          </Pressable>
-        ) : (
-          <Text style={styles.noGyms}>
-            No gyms saved. The session will still log; add a gym on the web app so the coach knows
-            what equipment you have.
-          </Text>
-        )}
-
         {/*
-          Logging a set you have already done, without first pressing START.
-          `onBeforeLog` is awaited, and that ordering is the whole point: the
-          session start is queued ahead of the sets, and `POST /api/sets`
-          resolves the workout server-side from whatever session is open — so a
-          set delivered before its start would land in yesterday's session or
-          fail outright.
+          On a laptop: the action block, what is owed and the last session on
+          the left; the main lifts and every recent workout on the right. On
+          the phone, one column, in exactly the order it always had.
         */}
-        <View style={styles.quickLog}>
-          <Label style={styles.quickLogLabel}>Already did a set?</Label>
-          <QuickLog onBeforeLog={onStart} />
-        </View>
+        <Columns
+          left={
+            <>
+            {/* The action block. Bare views, not a Card: it is the action, not content. */}
+            <Button
+              size="hero"
+              onPress={() => {
+                tapSelect();
+                void onStart();
+              }}
+            >
+              START LIFT
+            </Button>
 
-        {/*
-          The three content cards, all of which read `bootstrap`. On a cold
-          launch with no cache there is nothing to draw them from for about a
-          second; the action block above does not depend on it and is up
-          immediately, which is the half that matters.
-        */}
-        {next !== null && (
-          <>
-            <Card>
-              <Label>Next up</Label>
-
-              {next.rows.map((row, i) => (
-                <View key={row.muscle} style={[styles.owedRow, i > 0 && styles.divided]}>
-                  <Text style={styles.owedLabel}>{row.label}</Text>
-                  <Text style={styles.owedDetail}>{row.detail}</Text>
-                </View>
-              ))}
-
-              {/* A statement when there is nothing to rank. Never a blank card. */}
-              {next.note !== null && <Text style={styles.note}>{next.note}</Text>}
-
-              {next.gap !== null && <Text style={styles.quiet}>{next.gap}</Text>}
-
-              {/*
-                The caveat, and there is no rung below it: this card never says
-                the data is too thin to call. It says what it is working from and
-                then answers anyway.
-              */}
-              {next.caveat !== null && <Text style={styles.quiet}>{next.caveat}</Text>}
-
-              <Button
-                variant="secondary"
-                size="lg"
-                style={styles.action}
+            {gyms.length > 0 ? (
+              <Pressable
                 onPress={() => {
                   tapSelect();
-                  setAdding(true);
+                  setPicking(true);
                 }}
+                accessibilityRole="button"
+                accessibilityLabel={`Gym: ${gym?.name ?? "none"}. Tap to change.`}
+                style={({ pressed }) => [styles.gym, pressed && styles.gymPressed]}
               >
-                PICK A LIFT
-              </Button>
-            </Card>
+                <Text style={styles.gymText}>{gym?.name ?? "Pick a gym"}</Text>
+              </Pressable>
+            ) : (
+              <Text style={styles.noGyms}>
+                No gyms saved. The session logs the same without one.
+              </Text>
+            )}
 
-            <Card>
-              <Label>Last session</Label>
+            {/*
+              Logging a set you have already done, without first pressing START.
+              `onBeforeLog` is awaited, and that ordering is the whole point: the
+              session start is queued ahead of the sets, and `POST /api/sets`
+              resolves the workout server-side from whatever session is open — so a
+              set delivered before its start would land in yesterday's session or
+              fail outright.
+            */}
+            <View style={styles.quickLog}>
+              <Label style={styles.quickLogLabel}>Already did a set?</Label>
+              <QuickLog onBeforeLog={onStart} />
+            </View>
 
-              {last === null ? (
-                <Text style={styles.note}>
-                  No completed sessions yet. Once you finish one, its lifts and weights appear here
-                  ready to repeat.
-                </Text>
-              ) : (
-                <>
-                  <View style={styles.sessionHead}>
-                    <Text style={styles.sessionName} numberOfLines={1}>{last.name}</Text>
-                    <Text style={styles.sessionWhen}>{last.when}</Text>
-                  </View>
+            {/*
+              The three content cards, all of which read `bootstrap`. On a cold
+              launch with no cache there is nothing to draw them from for about a
+              second; the action block above does not depend on it and is up
+              immediately, which is the half that matters.
+            */}
+            {next !== null && (
+              <>
+                <Card>
+                  <Label>Next up</Label>
 
-                  {last.rows.map((row, i) => (
-                    <View key={row.exerciseId} style={[styles.liftRow, i > 0 && styles.divided]}>
-                      <Text style={styles.liftName} numberOfLines={1}>{row.name}</Text>
-                      <Text style={styles.liftDetail}>{row.detail}</Text>
+                  {next.rows.map((row, i) => (
+                    <View key={row.muscle} style={[styles.owedRow, i > 0 && styles.divided]}>
+                      <Text style={styles.owedLabel}>{row.label}</Text>
+                      <Text style={styles.owedDetail}>{row.detail}</Text>
                     </View>
                   ))}
+
+                  {/* A statement when there is nothing to rank. Never a blank card. */}
+                  {next.note !== null && <Text style={styles.note}>{next.note}</Text>}
+
+                  {next.gap !== null && <Text style={styles.quiet}>{next.gap}</Text>}
+
+                  {/*
+                    The caveat, and there is no rung below it: this card never says
+                    the data is too thin to call. It says what it is working from and
+                    then answers anyway.
+                  */}
+                  {next.caveat !== null && <Text style={styles.quiet}>{next.caveat}</Text>}
 
                   <Button
                     variant="secondary"
@@ -300,82 +272,125 @@ export function StartScreen({
                     style={styles.action}
                     onPress={() => {
                       tapSelect();
-                      void onStartWith(last.exerciseIds);
+                      setAdding(true);
                     }}
                   >
-                    REPEAT THIS SESSION
+                    PICK A LIFT
                   </Button>
-                  {/*
-                    Pre-loads, does not log. Logging sets the owner has not done
-                    would corrupt the only history this app has, and a one-tap
-                    repeat that silently wrote four sets of bench would be the
-                    worst bug on this screen.
-                  */}
-                  <Text style={styles.fine}>
-                    Starts a session with these lifts and last session&apos;s weights loaded. Nothing
-                    is logged until you tap LOG.
-                  </Text>
-                </>
-              )}
-            </Card>
+                </Card>
 
-            <Card>
-              <Label>Main lifts</Label>
-              {mains.length === 0 ? (
-                <Text style={styles.note}>
-                  Nothing yet. Log the same lift twice and its trend appears here.
-                </Text>
-              ) : (
-                mains.map((row, i) => (
-                  <MainLift
-                    key={row.exerciseId}
-                    row={row}
-                    divided={i > 0}
-                    onPress={() => {
-                      tapSelect();
-                      router.push({ pathname: "/exercise", params: { id: row.exerciseId } });
-                    }}
-                  />
-                ))
-              )}
-            </Card>
+                <Card>
+                  <Label>Last session</Label>
 
-            {/*
-              Every past workout, one row each — never one row per date, which
-              is how two sessions used to be drawn as one. A row opens that
-              workout: every set, each one fixable, sets and lifts addable, and
-              the delete the owner asked for "just in case there are errors" at
-              the bottom of it. The delete used to be the only thing a row
-              could do; it moved there with its confirmation unchanged.
-            */}
-            {recent.length > 0 && (
-              <Card>
-                <Label>Recent workouts</Label>
-                {recent.map((row, i) => (
-                  <Pressable
-                    key={row.id}
-                    onPress={() => {
-                      tapSelect();
-                      router.push({ pathname: "/workout", params: { id: row.id } });
-                    }}
-                    accessibilityRole="button"
-                    accessibilityLabel={`${row.name}, ${row.when}, ${row.summary}`}
-                    accessibilityHint="Opens this workout to view or edit its sets"
-                    style={({ pressed }) => [
-                      styles.recentRow, i > 0 && styles.divided, pressed && styles.pressed,
-                    ]}
-                  >
-                    <View style={styles.sessionHead}>
-                      <Text style={styles.sessionName} numberOfLines={1}>{row.name}</Text>
-                      <Text style={styles.sessionWhen}>{row.when}</Text>
-                    </View>
-                    <Text style={styles.liftDetail} numberOfLines={1}>{row.summary}</Text>
-                  </Pressable>
-                ))}
-              </Card>
+                  {last === null ? (
+                    <Text style={styles.note}>
+                      No completed sessions yet. Once you finish one, its lifts and weights appear here
+                      ready to repeat.
+                    </Text>
+                  ) : (
+                    <>
+                      <View style={styles.sessionHead}>
+                        <Text style={styles.sessionName} numberOfLines={1}>{last.name}</Text>
+                        <Text style={styles.sessionWhen}>{last.when}</Text>
+                      </View>
+
+                      {last.rows.map((row, i) => (
+                        <View key={row.exerciseId} style={[styles.liftRow, i > 0 && styles.divided]}>
+                          <Text style={styles.liftName} numberOfLines={1}>{row.name}</Text>
+                          <Text style={styles.liftDetail}>{row.detail}</Text>
+                        </View>
+                      ))}
+
+                      <Button
+                        variant="secondary"
+                        size="lg"
+                        style={styles.action}
+                        onPress={() => {
+                          tapSelect();
+                          void onStartWith(last.exerciseIds);
+                        }}
+                      >
+                        REPEAT THIS SESSION
+                      </Button>
+                      {/*
+                        Pre-loads, does not log. Logging sets the owner has not done
+                        would corrupt the only history this app has, and a one-tap
+                        repeat that silently wrote four sets of bench would be the
+                        worst bug on this screen.
+                      */}
+                      <Text style={styles.fine}>
+                        Starts a session with these lifts and last session&apos;s weights loaded. Nothing
+                        is logged until you tap LOG.
+                      </Text>
+                    </>
+                  )}
+                </Card>
+              </>
             )}
-          </>
-        )}
+            </>
+          }
+          right={
+            next !== null && (
+              <>
+                <Card>
+                  <Label>Main lifts</Label>
+                  {mains.length === 0 ? (
+                    <Text style={styles.note}>
+                      Nothing yet. Log the same lift twice and its trend appears here.
+                    </Text>
+                  ) : (
+                    mains.map((row, i) => (
+                      <MainLift
+                        key={row.exerciseId}
+                        row={row}
+                        divided={i > 0}
+                        onPress={() => {
+                          tapSelect();
+                          router.push({ pathname: "/exercise", params: { id: row.exerciseId } });
+                        }}
+                      />
+                    ))
+                  )}
+                </Card>
+
+                {/*
+                  Every past workout, one row each — never one row per date, which
+                  is how two sessions used to be drawn as one. A row opens that
+                  workout: every set, each one fixable, sets and lifts addable, and
+                  the delete the owner asked for "just in case there are errors" at
+                  the bottom of it. The delete used to be the only thing a row
+                  could do; it moved there with its confirmation unchanged.
+                */}
+                {recent.length > 0 && (
+                  <Card>
+                    <Label>Recent workouts</Label>
+                    {recent.map((row, i) => (
+                      <Pressable
+                        key={row.id}
+                        onPress={() => {
+                          tapSelect();
+                          router.push({ pathname: "/workout", params: { id: row.id } });
+                        }}
+                        accessibilityRole="button"
+                        accessibilityLabel={`${row.name}, ${row.when}, ${row.summary}`}
+                        accessibilityHint="Opens this workout to view or edit its sets"
+                        style={({ pressed }) => [
+                          styles.recentRow, i > 0 && styles.divided, pressed && styles.pressed,
+                        ]}
+                      >
+                        <View style={styles.sessionHead}>
+                          <Text style={styles.sessionName} numberOfLines={1}>{row.name}</Text>
+                          <Text style={styles.sessionWhen}>{row.when}</Text>
+                        </View>
+                        <Text style={styles.liftDetail} numberOfLines={1}>{row.summary}</Text>
+                      </Pressable>
+                    ))}
+                  </Card>
+                )}
+              </>
+            )
+          }
+        />
       </View>
 
       {/*
@@ -412,9 +427,8 @@ export function StartScreen({
         answer to "what do I train" — a list of lifts for the muscles the card
         above just named — so there is no second ordering to maintain here.
       */}
-      <Modal
+      <Overlay
         visible={adding}
-        animationType="slide"
         onRequestClose={() => setAdding(false)}
         statusBarTranslucent
       >
@@ -425,7 +439,7 @@ export function StartScreen({
             void onStartWith([exercise.id]);
           }}
         />
-      </Modal>
+      </Overlay>
     </Screen>
   );
 }

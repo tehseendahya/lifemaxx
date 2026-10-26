@@ -1,10 +1,10 @@
 import { useRef, useState } from "react";
-import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
-  Button, Card, Screen, Sheet, Spinner, Stat, color, hit, microLabel, space, tnum,
+  Button, Overlay, Card, Screen, Sheet, Spinner, Stat, color, hit, microLabel, space, tnum,
 } from "@/components/ui";
 import type { WeightUnit } from "@/components/ui/weight-entry";
 import { apiGet } from "@/lib/api";
@@ -415,9 +415,8 @@ export default function WorkoutScreen() {
         opens the add sheet on it straight away — a lift with no sets is not
         something this screen can show, so there is no empty card in between.
       */}
-      <Modal
+      <Overlay
         visible={picking}
-        animationType="slide"
         onRequestClose={() => setPicking(false)}
         statusBarTranslucent
       >
@@ -429,7 +428,7 @@ export default function WorkoutScreen() {
             openAdd(exercise.id, addPrefill(here, bootstrap.data?.lastSets[exercise.id]));
           }}
         />
-      </Modal>
+      </Overlay>
     </Screen>
   );
 }

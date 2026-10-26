@@ -3,6 +3,15 @@
 **Status:** draft spec for discussion
 **Owner:** tehseendahya
 
+> **Platform sections are superseded.** The product decisions here still hold:
+> photos never stored, lb on screen and kg in the database, cheap models,
+> split-agnostic muscle-debt ranking, Supabase, Strava and Health Auto Export.
+> The **platform** choice has changed. The UI isn't a Next.js PWA any more: it's
+> the Expo app in `mobile/`, on the phone (Expo Go) and the laptop (Expo web),
+> and Next.js is the backend only. Where this spec talks about the PWA, Dexie,
+> IndexedDB or Next.js pages (§0's first row, §2, the stack in §3), read
+> [`CLAUDE.md`](../CLAUDE.md) instead.
+
 ---
 
 ## 0. TL;DR — the decisions

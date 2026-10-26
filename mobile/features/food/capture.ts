@@ -1,8 +1,9 @@
+import { Platform } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 import { File, Paths } from "expo-file-system";
 
-import { isScratchUri, resizeForLongestEdge } from "./model";
+import { isScratchUri, resizeForLongestEdge, scratchDisposal } from "./model";
 
 /**
  * Camera or library → a base64 JPEG data URL, and nothing else.
@@ -25,6 +26,14 @@ import { isScratchUri, resizeForLongestEdge } from "./model";
  * This function never returns a file URI and never logs one. The only thing
  * that escapes it is the data URL, which the composer holds in React state and
  * drops on save, on cancel and on unmount.
+ *
+ * In a browser the same rule holds with different nouns. There is no camera
+ * path (the laptop's button is "Upload photo", the library picker, which
+ * expo-image-picker implements as a file input), there are no temp files, and
+ * expo-file-system has no web implementation at all — so nothing here may
+ * touch it on the web. What the picker and the resizer leave behind instead
+ * are two object URLs, each holding the full photo in the tab's memory, and
+ * those are revoked in the same `finally`. See `scratchDisposal`.
  */
 
 /** 1024px at q0.8 lands around 120KB. */
@@ -97,7 +106,14 @@ export async function pickMealPhoto(): Promise<CaptureOutcome> {
   // The picker copies the chosen photo into our cache, and that copy is
   // scratch. The original is the user's, though, so the picker's file is
   // deleted only when it is provably inside the cache — see `isScratchUri`.
-  return processAsset(asset, isScratchUri(asset.uri, cacheRoot()));
+  //
+  // In a browser the picker hands back an object URL it minted for this pick,
+  // which is ours to revoke (the user's file on disk is untouched by that),
+  // and there is no cache directory to ask about — `Paths` is native only.
+  const scratch = Platform.OS === "web"
+    ? scratchDisposal(asset.uri) === "blob"
+    : isScratchUri(asset.uri, cacheRoot());
+  return processAsset(asset, scratch);
 }
 
 /** `""` when the cache directory cannot be resolved, which `isScratchUri` refuses. */
@@ -160,19 +176,30 @@ async function processAsset(
 }
 
 /**
- * Delete a temp file, and never let the attempt break a meal log.
+ * Release one scratch copy, and never let the attempt break a meal log.
  *
- * Guarded on `file://` for two reasons: only a local file can be deleted at
- * all, and on the react-native-web smoke target the picker hands back a
- * `blob:`/`data:` URL while `new File()` warns that expo-file-system has no web
- * implementation. Nothing is logged on failure — not even the URI — because a
- * leftover temp file is a smaller problem than a meal photo's path in a log.
+ * A `file://` temp file is deleted, on the phone only: expo-file-system has no
+ * web implementation, and `new File()` there only warns. A `blob:` object URL
+ * is revoked, which is how a browser lets go of the photo it holds. Anything
+ * else has nothing to release. Nothing is logged on failure — not even the URI
+ * — because a leftover temp file is a smaller problem than a meal photo's path
+ * in a log.
  */
 function discard(uri: string): void {
-  if (!uri.startsWith("file://")) return;
   try {
-    const file = new File(uri);
-    if (file.exists) file.delete();
+    switch (scratchDisposal(uri)) {
+      case "file": {
+        if (Platform.OS === "web") return;
+        const file = new File(uri);
+        if (file.exists) file.delete();
+        return;
+      }
+      case "blob":
+        URL.revokeObjectURL(uri);
+        return;
+      case "none":
+        return;
+    }
   } catch {
     /* Already gone, or not ours to delete. Either way there is nothing to do. */
   }

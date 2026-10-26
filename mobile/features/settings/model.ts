@@ -380,6 +380,27 @@ export function describeReachability(state: Reachability, baseUrl: string): Reac
   }
 }
 
+// ------------------------------------------------------------ password reset
+
+/**
+ * Where the password-reset email's link sends the user.
+ *
+ * Supabase emails a link that signs the user in and redirects here; the
+ * server's `/auth/callback` exchanges the code for a cookie session and then
+ * forwards to `/reset-password`, the one page the server still renders. Both
+ * routes live on the API's origin — which in a browser is the page's own
+ * origin, and on the phone is the API base URL — so the caller passes that in.
+ *
+ * `null` when there is no usable origin (an unconfigured build), so the screen
+ * can say so instead of emailing a link to nowhere. A trailing slash is
+ * dropped so the path is never `//auth/callback`.
+ */
+export function passwordResetRedirect(origin: string): string | null {
+  const base = origin.trim().replace(/\/+$/, "");
+  if (!/^https?:\/\/[^/]+/.test(base)) return null;
+  return `${base}/auth/callback?next=/reset-password`;
+}
+
 // -------------------------------------------------------------------- shared
 
 function plural(n: number, noun: string): string {

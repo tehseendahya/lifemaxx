@@ -51,6 +51,11 @@ config.resolver.blockList = [
  * backed by wa-sqlite and imports a `.wasm` file, which is not in Metro's
  * default `assetExts` — so the web bundle fails on `Unable to resolve
  * "./wa-sqlite/wa-sqlite.wasm"` while iOS builds cleanly. Harmless on native.
+ *
+ * The web bundle no longer imports expo-sqlite at all — the browser's outbox
+ * is `lib/outbox-db.web.ts`, over localStorage, for the reasons on
+ * `createKeyValueStore` — so this is now only insurance against a future
+ * import breaking the web build.
  */
 config.resolver.assetExts = [...config.resolver.assetExts, "wasm"];
 

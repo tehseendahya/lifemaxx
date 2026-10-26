@@ -16,9 +16,6 @@ import { localDate } from "./queries";
  * one across an HTTP round trip pins a pooler connection for its duration.
  */
 
-/** Holds the OAuth nonce for the length of the round trip. */
-export const STRAVA_STATE_COOKIE = "strava_oauth_state";
-
 const API = "https://www.strava.com/api/v3";
 const OAUTH = "https://www.strava.com/oauth";
 

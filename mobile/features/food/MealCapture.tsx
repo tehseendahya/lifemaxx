@@ -1,5 +1,5 @@
 import { useRef, useState, type ComponentRef } from "react";
-import { Image, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Image, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { Button, Card, Label, color, hit, microLabel, radius, space } from "@/components/ui";
 import { tapDone, tapError, tapSelect } from "@/lib/haptics";
@@ -86,6 +86,15 @@ const styles = StyleSheet.create({
   hint: { color: color.muted, fontSize: 12, lineHeight: 17, marginTop: space.sm },
   bad: { color: color.bad, fontSize: 12, lineHeight: 17, marginTop: space.sm },
 });
+
+/**
+ * In a browser there is no camera button: a laptop's webcam pointed at a plate
+ * is not how anyone photographs a meal, and the photo is already on the phone
+ * or in Downloads. One "Upload photo" button opens the file picker — the same
+ * `pickMealPhoto` path the phone's Library button uses, so the same resize,
+ * encode and discard, and nothing stored.
+ */
+const WEB = Platform.OS === "web";
 
 export function MealCapture({ localDate, dayLabel, onSaved }: {
   /** The day being viewed, or `null` for today — then the server picks the date. */
@@ -275,14 +284,27 @@ export function MealCapture({ localDate, dayLabel, onSaved }: {
             <Text style={styles.chipGlyph}>×</Text>
           </Pressable>
           <Pressable
-            onPress={() => { void attach(captureMealPhoto, CAMERA_DENIED); }}
+            onPress={() => {
+              void (WEB ? attach(pickMealPhoto, LIBRARY_DENIED) : attach(captureMealPhoto, CAMERA_DENIED));
+            }}
             disabled={busy}
             style={styles.chip}
             accessibilityRole="button"
-            accessibilityLabel="Retake the photo"
+            accessibilityLabel={WEB ? "Choose a different photo" : "Retake the photo"}
           >
-            <Text style={styles.chipLabel}>Retake</Text>
+            <Text style={styles.chipLabel}>{WEB ? "Replace" : "Retake"}</Text>
           </Pressable>
+        </View>
+      ) : WEB ? (
+        <View style={styles.sources}>
+          <Button
+            variant="secondary"
+            style={styles.source}
+            onPress={() => { void attach(pickMealPhoto, LIBRARY_DENIED); }}
+            disabled={busy}
+          >
+            Upload photo
+          </Button>
         </View>
       ) : (
         <View style={styles.sources}>

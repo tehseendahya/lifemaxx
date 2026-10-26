@@ -1,0 +1,81 @@
+name: EAS Update (phone)
+
+# Publishes the client to EAS Update branch `main` whenever main changes code
+# that the phone bundle contains: the app itself, or the shared domain layer it
+# imports from src/lib. Expo Go picks it up on the next full close and reopen.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "mobile/**"
+      - "src/lib/**"
+  workflow_dispatch:
+
+# Never run two publishes at once. A newer push waits for the running publish
+# and replaces any older one still queued, so the latest merge always wins.
+concurrency:
+  group: eas-update-main
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      EXPO_NO_TELEMETRY: "1"
+      CI: "1"
+    steps:
+      - name: Skip when EXPO_TOKEN is not configured
+        if: env.EXPO_TOKEN == ''
+        run: >-
+          echo "::notice title=EAS Update skipped::The EXPO_TOKEN secret is not set.
+          Create a token at expo.dev (Account settings > Access tokens) and add it under
+          GitHub > Settings > Secrets and variables > Actions."
+
+      - uses: actions/checkout@v4
+        if: env.EXPO_TOKEN != ''
+
+      - uses: actions/setup-node@v4
+        if: env.EXPO_TOKEN != ''
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            mobile/package-lock.json
+
+      # The root install is needed by mobile's typecheck (see ci.yml).
+      - if: env.EXPO_TOKEN != ''
+        run: npm install --no-audit --no-fund
+      - if: env.EXPO_TOKEN != ''
+        run: npm ci
+        working-directory: mobile
+
+      # A cheap gate so a broken main never reaches the phone, even when CI on
+      # the merge commit hasn't finished yet.
+      - if: env.EXPO_TOKEN != ''
+        run: npx tsc --noEmit && npx vitest run
+        working-directory: mobile
+
+      - name: Publish
+        if: env.EXPO_TOKEN != ''
+        working-directory: mobile
+        run: |
+          subject="$(git log -1 --format=%s)"
+          # A merge commit's subject is "Merge pull request #N from ...", and
+          # GitHub puts the PR title on the first body line, which says more.
+          case "$subject" in
+            "Merge pull request"*)
+              title="$(git log -1 --format=%b | sed '/^[[:space:]]*$/d' | head -n 1)"
+              if [ -n "$title" ]; then subject="$title"; fi
+              ;;
+          esac
+          npx eas-cli@latest update \
+            --branch main \
+            --environment production \
+            --non-interactive \
+            --message "$subject"

@@ -174,8 +174,8 @@ export function SettingsRows({ probe, onBaseChanged, email }: {
         <Text style={styles.version}>lifemaxx {version} · Expo SDK {sdk}</Text>
         {/* Both are things a user would otherwise spend an evening hunting for. */}
         <Text style={styles.about}>
-          Push notifications are web-only today. Turn them on in the browser app and
-          add it to your home screen — they do not reach this client.
+          Push notifications are web-only. Open this app in a browser and turn them
+          on under Connections — they do not reach Expo Go.
         </Text>
         <Text style={styles.about}>
           Apple Health cannot be read from Expo Go, so there is no HealthKit here.

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="%LANG_ISO_CODE%">
+  <head>
+    <!--
+      The HTML shell of the web build, which is what Vercel serves at every
+      non-API path (see scripts/build-client.mjs and the fallback rewrite in
+      next.config.ts). `expo export --platform web` with `output: "single"`
+      uses this file as its template when it exists, injecting the bundle
+      script tags before the closing body tag (never write that tag literally in a comment here: Expo injects before its FIRST occurrence, which once put the whole bundle inside this comment and served a blank page); it is Expo's default template plus the
+      PWA tags the old Next layout used to emit, so a phone that added the
+      site to its home screen keeps its icon, name and dark status bar.
+    -->
+    <meta charset="utf-8" />
+    <meta httpEquiv="X-UA-Compatible" content="IE=edge" />
+    <!--
+      viewport-fit=cover so the safe-area insets react-native-safe-area-context
+      reads are real on an iPhone; no maximum-scale, because blocking zoom is
+      an accessibility regression on a laptop and iOS ignores it anyway.
+    -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no, viewport-fit=cover" />
+    <title>Lifemaxx</title>
+    <meta name="description" content="Meals, lifts and cardio in one tracker, with a coach that reads your own data." />
+    <meta name="theme-color" content="#0d1013" />
+    <meta name="color-scheme" content="dark" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Lifemaxx" />
+    <!-- The `react-native-web` recommended style reset: https://necolas.github.io/react-native-web/docs/setup/#root-element -->
+    <style id="expo-reset">
+      /* These styles make the body full-height */
+      html,
+      body {
+        height: 100%;
+        /* The app is dark-only; painting the ground colour here means the
+           moment before the bundle runs is not a white flash. */
+        background-color: #0d1013;
+      }
+      /* These styles disable body scrolling if you are using <ScrollView> */
+      body {
+        overflow: hidden;
+      }
+      /* These styles make the root element full-height */
+      #root {
+        display: flex;
+        height: 100%;
+        flex: 1;
+      }
+    </style>
+  </head>
+
+  <body>
+    <noscript> You need to enable JavaScript to run this app. </noscript>
+    <!-- The root element for your Expo app. -->
+    <div id="root"></div>
+  </body>
+</html>

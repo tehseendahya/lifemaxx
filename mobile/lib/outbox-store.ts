@@ -110,6 +110,80 @@ export function createSqliteStore(db: SqliteLike): OutboxStore {
   };
 }
 
+// ------------------------------------------------------------ the browser's
+
+/** The two calls the browser store needs; `window.localStorage` has both. */
+export interface KeyValueLike {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+}
+
+export const WEB_OUTBOX_KEY = "lifemaxx.outbox";
+
+/**
+ * The `OutboxStore` for the laptop, over `localStorage`.
+ *
+ * Not expo-sqlite's web build, which is the obvious choice and the wrong one
+ * here. It runs wa-sqlite in a Web Worker created from
+ * `new URL("./worker", window.location.href)` — a path relative to whatever
+ * page is open, which `expo export` does not emit. Behind the server's
+ * catch-all SPA rewrite that request comes back as `index.html`, the worker
+ * never answers, and opening the database waits forever instead of throwing:
+ * `getStore()` would never settle, the memory fallback would never engage, and
+ * every set logged on the laptop would silently go nowhere. Its synchronous
+ * calls also need `SharedArrayBuffer`, which means cross-origin isolation
+ * headers (COOP/COEP) on the whole site. A laptop's
+ * queue is a handful of rows that are usually delivered in the same second;
+ * one JSON array in `localStorage` is durable across a reload, needs nothing
+ * from the server, and cannot hang.
+ *
+ * Every read parses the stored array and every write rewrites it, so two tabs
+ * see each other's rows on their next flush. A corrupt or foreign value reads
+ * as an empty queue rather than throwing: losing a queue the browser mangled is
+ * better than a save button that throws on every press.
+ */
+export function createKeyValueStore(kv: KeyValueLike, key = WEB_OUTBOX_KEY): OutboxStore {
+  const read = (): OutboxItem[] => {
+    try {
+      const parsed: unknown = JSON.parse(kv.getItem(key) ?? "[]");
+      return Array.isArray(parsed) ? (parsed as OutboxItem[]) : [];
+    } catch {
+      return [];
+    }
+  };
+  const write = (items: OutboxItem[]) => kv.setItem(key, JSON.stringify(items));
+
+  return {
+    async all() {
+      // Oldest first, for the same reason the SQLite store orders its rows.
+      return read().sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+    },
+
+    async put(item) {
+      const items = read();
+      const at = items.findIndex((i) => i.id === item.id);
+      if (at === -1) {
+        items.push(item);
+      } else {
+        // The same upsert rule as the SQLite store: a retry records its
+        // attempt and backoff, and may not rewrite what was logged or when.
+        const current = items[at];
+        items[at] = {
+          ...current,
+          attempts: item.attempts,
+          nextAttemptAt: item.nextAttemptAt,
+          lastError: item.lastError,
+        };
+      }
+      write(items);
+    },
+
+    async remove(id) {
+      write(read().filter((i) => i.id !== id));
+    },
+  };
+}
+
 // ------------------------------------------------------- stale session starts
 
 /**
