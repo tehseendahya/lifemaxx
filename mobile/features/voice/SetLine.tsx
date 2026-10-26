@@ -1,10 +1,9 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
-import { color, radius, space, tnum } from "@/components/ui";
+import { Segmented, color, radius, space, tnum } from "@/components/ui";
+import type { Segment } from "@/components/ui";
 import { microLabel } from "@/components/ui/Label";
 import { tapSelect } from "@/lib/haptics";
-import { Segmented } from "./Segmented";
-import type { Segment } from "./Segmented";
 import { ROW_WIDTHS } from "./row-widths";
 import {
   fmtWeight,

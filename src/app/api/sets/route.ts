@@ -83,6 +83,35 @@ export const POST = route<Body>(async ({ userId, body }) => {
     loggedAt,
   };
 
+  /*
+   * What a second write of the same set is allowed to change.
+   *
+   * `reps` and `weightLb` are required on the body, so they are always written.
+   * EVERYTHING ELSE is written only when the body actually provides it, and
+   * left exactly as it was when the body omits it.
+   *
+   * That rule is for the phone's fix-a-set sheet. There is no PATCH route — a
+   * correction is a re-POST of the same `clientId`, which is what lets it go
+   * through the outbox and therefore work in a basement. But the phone's
+   * session payload carries the figures a chip draws and NOT the set note or
+   * the raw text of what was dictated, so a correction built from what the
+   * phone knows would have sent `note: ""` and wiped a sentence the owner
+   * typed. Omitting a field is now how a caller says "leave this alone".
+   *
+   * It changes nothing for a retry, which re-sends the identical payload it was
+   * minted with, and nothing for the web logger, which sends every field.
+   */
+  const correction = {
+    reps: values.reps,
+    weightKg: values.weightKg,
+    ...(body.rpe !== undefined ? { rpe: values.rpe } : {}),
+    ...(body.toFailure !== undefined ? { toFailure: values.toFailure } : {}),
+    ...(body.isWarmup !== undefined ? { isWarmup: values.isWarmup } : {}),
+    ...(body.felt !== undefined ? { felt: values.felt } : {}),
+    ...(body.note !== undefined ? { note: values.note } : {}),
+    ...(body.rawText !== undefined ? { rawText: values.rawText } : {}),
+  };
+
   // A retry after a lost response carries the same clientId, so it lands on the
   // row it already wrote instead of creating a second one. Without a clientId
   // there is nothing to match on and it inserts, which is the old behaviour and
@@ -90,13 +119,11 @@ export const POST = route<Body>(async ({ userId, body }) => {
   const [row] = body.clientId
     ? await db.insert(sets).values(values).onConflictDoUpdate({
       target: [sets.workoutId, sets.clientId],
-      // set_index is left alone: the first delivery already claimed a position
-      // in the session, and recomputing it on a retry would renumber the set.
-      set: {
-        reps: values.reps, weightKg: values.weightKg, rpe: values.rpe,
-        toFailure: values.toFailure, isWarmup: values.isWarmup, felt: values.felt,
-        note: values.note, rawText: values.rawText,
-      },
+      // set_index and rest_s are left alone: the first delivery already claimed
+      // a position in the session and measured the gap before it, and
+      // recomputing either on a retry — or on a correction made an hour later —
+      // would renumber the set and record an hour of rest in front of it.
+      set: correction,
     }).returning()
     : await db.insert(sets).values(values).returning();
 

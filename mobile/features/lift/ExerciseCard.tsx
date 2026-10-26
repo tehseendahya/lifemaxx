@@ -1,9 +1,11 @@
 import { useEffect } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
-import { Button, Card, Label, Toggle, color, hit, radius, space, tnum } from "@/components/ui";
+import { Button, Card, Label, Segmented, Toggle, color, hit, radius, space, tnum } from "@/components/ui";
+import type { Segment } from "@/components/ui";
 import { microLabel } from "@/components/ui/Label";
 import { tapSelect } from "@/lib/haptics";
+import { KIND_LABEL, SET_KINDS, kindFlags, setKindOf, type SetKind } from "@/lib/set-kind";
 import { lbToKg, platesPerSide } from "@/lib/shared/units";
 import type { LastSet } from "@/lib/types";
 import {
@@ -24,6 +26,26 @@ const FELT = [
   { key: "normal", label: "NORMAL" },
   { key: "strong", label: "STRONG" },
 ] as const;
+
+/**
+ * Warmup, working and to failure, as one control.
+ *
+ * Same three tones the confirmation sheet uses, from the same `KIND_LABEL`, so
+ * a warmup looks like a warmup on both screens. Working is the accent because
+ * it is the answer that is true for most of a session and the one the card
+ * returns to after every save.
+ */
+const KIND_TONE: Record<SetKind, "accent" | "warn" | "muted"> = {
+  warmup: "muted",
+  working: "accent",
+  failure: "warn",
+};
+
+const KIND_SEGMENTS: readonly Segment<SetKind>[] = SET_KINDS.map((kind) => ({
+  value: kind,
+  label: KIND_LABEL[kind],
+  tone: KIND_TONE[kind],
+}));
 
 const styles = StyleSheet.create({
   name: { color: color.ink, fontSize: 20, fontWeight: "600", letterSpacing: -0.2 },
@@ -66,7 +88,8 @@ const styles = StyleSheet.create({
 
   plates: { ...microLabel, ...tnum, marginTop: space.sm },
 
-  chips: { flexDirection: "row", flexWrap: "wrap", gap: space.sm, marginTop: space.lg },
+  kind: { marginTop: space.lg },
+  chips: { flexDirection: "row", flexWrap: "wrap", gap: space.sm, marginTop: space.sm },
   rpeRow: { flexDirection: "row", gap: space.sm, marginTop: space.sm },
   rpeChip: { flex: 1, paddingHorizontal: 0 },
 
@@ -170,28 +193,32 @@ export function ExerciseCard({
 
       <Plates equipment={exercise.equipment} weightLb={entry.weightLb} />
 
+      {/*
+        One question with three answers, not two switches.
+
+        These were two `<Toggle>` pills — WARMUP and TO FAILURE — and nothing
+        stopped both being on at once. The owner sent a screenshot of exactly
+        that and said it should be "one or the other", which it now is by
+        construction: `kindFlags` writes BOTH columns on every tap, so the pair
+        cannot come apart. It is also the control the confirmation sheet has
+        always used for the same two flags; see `lib/set-kind.ts`.
+      */}
+      <View style={styles.kind}>
+        <Segmented
+          micro
+          options={KIND_SEGMENTS}
+          value={setKindOf(draft)}
+          onSelect={(kind) => {
+            tapSelect();
+            onDraft(kindFlags(kind));
+          }}
+          accessibilityLabel="Set kind"
+        />
+      </View>
+
       <View style={styles.chips}>
         <Toggle on={rpeOpen || draft.rpe !== null} onPress={onToggleRpe}>
           {draft.rpe !== null ? `RPE ${draft.rpe}` : "RPE"}
-        </Toggle>
-        <Toggle
-          on={draft.toFailure}
-          tone="warn"
-          onPress={() => {
-            tapSelect();
-            onDraft({ toFailure: !draft.toFailure });
-          }}
-        >
-          TO FAILURE
-        </Toggle>
-        <Toggle
-          on={draft.isWarmup}
-          onPress={() => {
-            tapSelect();
-            onDraft({ isWarmup: !draft.isWarmup });
-          }}
-        >
-          WARMUP
         </Toggle>
         {FELT.map((f) => (
           <Toggle

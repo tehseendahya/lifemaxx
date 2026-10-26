@@ -7,6 +7,7 @@ import type {
   SetWrite,
 } from "@/lib/types";
 import type { OutboxItem } from "@/lib/shared/outbox";
+import { kindFlags, setKindOf, type SetKind } from "../../lib/set-kind";
 
 /**
  * Everything in the live session that is a decision rather than a view.
@@ -19,7 +20,10 @@ import type { OutboxItem } from "@/lib/shared/outbox";
  * server row are the same set — all live here and all have tests.
  *
  * `import type` is load-bearing, not stylistic: esbuild erases it, so the
- * `@/lib/*` aliases never need resolving in the test runner.
+ * `@/lib/*` aliases never need resolving in the test runner. The one VALUE
+ * import is written relative for the same reason — `lib/set-kind.ts` holds the
+ * warmup/working/failure rule that this screen and the confirmation sheet have
+ * to agree on, and a shared rule is worth more than an unbroken convention.
  */
 
 // ---------------------------------------------------------------- constants
@@ -468,6 +472,216 @@ export function localSetFrom(payload: SetWrite, loggedAt: string): LocalSet {
     felt: payload.felt ?? null,
     loggedAt,
   };
+}
+
+
+// ------------------------------------------------------------ fixing a set
+
+/**
+ * Correcting a set that has already been logged.
+ *
+ * The owner's ask was two sentences long and the second one is this: *"should
+ * be able to click into a set below and edit smtg if you typed it in wrong"*.
+ * Until now the chips under the card could only be deleted — long-press, then
+ * a sheet offering REMOVE or KEEP IT — so a weight typed as 155 instead of 165
+ * cost a delete and a full re-log, which also moved the set to the end of the
+ * session.
+ *
+ * ── HOW A CORRECTION IS WRITTEN ────────────────────────────────────────────
+ *
+ * There is no PATCH route and there does not need to be one. `POST /api/sets`
+ * upserts on `(workout_id, client_id)` — that is what makes a retry after a
+ * lost response land on the row it already wrote — so re-posting the SAME
+ * `clientId` with different figures is an edit, and it goes through the outbox
+ * like every other write on this screen. Which means a correction works in the
+ * same basement the original set was logged in, and that is the whole reason
+ * to do it this way rather than with a direct request.
+ *
+ * Two things are deliberately NOT sent and cannot be changed by an edit:
+ *
+ *  - `exerciseId`, because the upsert leaves it alone. Moving a set to another
+ *    lift is a different operation (delete it, log it again) and pretending to
+ *    offer it here would silently do nothing.
+ *  - `setIndex` and `restS`, for the same reason. A corrected set keeps its
+ *    place in the session, which is the main thing delete-and-relog lost.
+ *
+ * `loggedAt` is carried forward explicitly. The server derives every rest gap
+ * in the session from the interval between consecutive `loggedAt` values, so
+ * an edit stamped at edit time would record a forty-minute rest on a set the
+ * owner did forty minutes ago.
+ */
+
+/**
+ * The ceilings `POST /api/sets` enforces, mirrored so the sheet can refuse what
+ * the server would refuse rather than queueing a write that comes back 400,
+ * gets classified permanent, and surfaces as "a set didn't save".
+ *
+ * These are `SANITY` in `src/lib/llm/shorthand.ts`. They are duplicated rather
+ * than imported because importing them would pull the whole deterministic
+ * parser into the phone's bundle for two numbers — and `logic.test.ts` imports
+ * the real thing and asserts these match, so the duplicate cannot drift.
+ */
+export const EDIT_MAX_REPS = 100;
+export const EDIT_MAX_WEIGHT_LB = 2000;
+
+/** Everything a correction can change. */
+export interface SetEdit {
+  weightLb: number;
+  reps: number;
+  rpe: number | null;
+  kind: SetKind;
+}
+
+/** The write that carries a correction. `loggedAt` is the ORIGINAL time. */
+export interface SetEditWrite extends SetWrite {
+  loggedAt: string;
+}
+
+/** The sheet opens showing exactly what is on the chip. */
+export function editFromSet(set: DisplaySet): SetEdit {
+  return {
+    weightLb: set.weightLb,
+    reps: set.reps,
+    rpe: set.rpe,
+    kind: setKindOf(set),
+  };
+}
+
+/**
+ * Whether this correction would change anything the user can see.
+ *
+ * Weight is compared at the precision it is DISPLAYED at, which is one decimal
+ * place — see `fmtWeight`. That is not laziness: storage is kg, so a weight
+ * entered in pounds comes back from the server as `kgToLb(lbToKg(x))` and need
+ * not be bit-identical to what was sent. Comparing exactly would make a
+ * correction look permanently undelivered, which is precisely the state
+ * `pruneEdits` below exists to leave.
+ */
+export function editChanged(set: DisplaySet, edit: SetEdit): boolean {
+  if (fmtWeight(set.weightLb) !== fmtWeight(edit.weightLb)) return true;
+  if (set.reps !== edit.reps) return true;
+  if (set.rpe !== edit.rpe) return true;
+  return setKindOf(set) !== edit.kind;
+}
+
+/** Why this correction cannot be saved, in the user's terms, or `null`. */
+export function editBlockedReason(edit: SetEdit): string | null {
+  if (!Number.isInteger(edit.reps) || edit.reps < 1) return "A set needs at least one rep.";
+  if (edit.reps > EDIT_MAX_REPS) return `${edit.reps} reps isn’t a set.`;
+  if (!Number.isFinite(edit.weightLb) || edit.weightLb < 0) return "A weight cannot be negative.";
+  if (edit.weightLb > EDIT_MAX_WEIGHT_LB) {
+    return `${fmtWeight(edit.weightLb)} lb isn’t a lift.`;
+  }
+  if (edit.rpe !== null && (edit.rpe < 1 || edit.rpe > 10)) {
+    return `RPE ${edit.rpe} isn’t on the scale.`;
+  }
+  return null;
+}
+
+/**
+ * The corrected write.
+ *
+ * `queuedPayload` is the original write's payload when the set has NOT been
+ * delivered yet, and `null` once it has. It is the difference between two cases
+ * that need different payloads:
+ *
+ *  - **Still queued.** The original never reaches the server — the session
+ *    screen drops it and queues this instead — so this payload is the only one
+ *    the row will ever be built from and it has to carry everything the
+ *    original did, including the set note and the raw text of whatever was
+ *    typed or spoken.
+ *  - **Already delivered.** The row exists and this is an UPDATE of it. `note`
+ *    and `rawText` are omitted, and the route leaves a field the body omits
+ *    exactly as it was — which is how a correction to the weight does not wipe
+ *    the sentence the owner dictated. (`undefined` values are dropped by
+ *    `JSON.stringify`, so an omitted key really is an absent key on the wire.)
+ */
+export function editSetPayload(
+  set: DisplaySet,
+  edit: SetEdit,
+  queuedPayload: Record<string, unknown> | null,
+): SetEditWrite {
+  const carried = (key: "note" | "rawText"): { [k: string]: string } | undefined => {
+    const value = queuedPayload?.[key];
+    return typeof value === "string" ? { [key]: value } : undefined;
+  };
+
+  return {
+    clientId: set.clientId,
+    exerciseId: set.exerciseId,
+    loggedAt: set.loggedAt,
+    reps: edit.reps,
+    weightLb: edit.weightLb,
+    rpe: edit.rpe,
+    ...kindFlags(edit.kind),
+    felt: set.felt,
+    ...carried("note"),
+    ...carried("rawText"),
+  };
+}
+
+/**
+ * Corrections that have been queued but are not yet visible in any source.
+ *
+ * Keyed by `clientId`, which is what every source of truth on this screen
+ * reconciles on. It exists for the one case the three sources cannot cover: a
+ * set that is ALREADY on the server. Queueing its correction changes nothing in
+ * `session.sets` until the queue drains and the session is refetched, so
+ * without this the chip would show the old figures for a second or two after a
+ * save — which reads as "my edit didn't work" and invites a second one.
+ */
+export type SetEdits = Record<string, SetEdit>;
+
+/** The merged list with every pending correction painted over it. */
+export function applyEdits(sets: DisplaySet[], edits: SetEdits): DisplaySet[] {
+  if (Object.keys(edits).length === 0) return sets;
+
+  return sets.map((set) => {
+    const edit = edits[set.clientId];
+    if (edit === undefined) return set;
+    return {
+      ...set,
+      weightLb: edit.weightLb,
+      reps: edit.reps,
+      rpe: edit.rpe,
+      ...kindFlags(edit.kind),
+    };
+  });
+}
+
+/**
+ * Drops a correction once it has nothing left to do.
+ *
+ * Two ways that happens: the set is gone (it was removed), or the figures the
+ * correction carries are the figures the merged list already shows — which is
+ * the case the moment the corrected write is delivered and the session
+ * refetched.
+ *
+ * Run against the RAW merged list, never the overlaid one: an overlay compared
+ * with itself always matches, and pruning on that would clear every correction
+ * on the frame it was made.
+ *
+ * This is also what makes a correction that genuinely fails to deliver visible
+ * rather than a permanent lie on screen. The outbox gives up after eight
+ * attempts and the screen says a set did not save; the chip snaps back to the
+ * figures the server actually holds, because this never drops an entry on a
+ * timer or on a guess.
+ */
+export function pruneEdits(edits: SetEdits, sets: DisplaySet[]): SetEdits {
+  const entries = Object.entries(edits);
+  if (entries.length === 0) return edits;
+
+  const byClientId = new Map(sets.map((set) => [set.clientId, set]));
+  const next: SetEdits = {};
+
+  for (const [clientId, edit] of entries) {
+    const set = byClientId.get(clientId);
+    if (set === undefined) continue;
+    if (!editChanged(set, edit)) continue;
+    next[clientId] = edit;
+  }
+
+  return Object.keys(next).length === entries.length ? edits : next;
 }
 
 // -------------------------------------------------------------- session gate

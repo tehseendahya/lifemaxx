@@ -30,6 +30,7 @@ import type { Bootstrap, CatalogueExercise, SessionPayload } from "@/lib/types";
 
 import { QuickLog } from "@/features/voice";
 
+import { EditSetSheet } from "./EditSetSheet";
 import { ExerciseCard } from "./ExerciseCard";
 import { ExercisePager } from "./ExercisePager";
 import { ExercisePicker } from "./ExercisePicker";
@@ -40,15 +41,19 @@ import { useRestTimer } from "./useRestTimer";
 import { useSuggestions } from "./useSuggestions";
 import type { QueuedWrites } from "./useQueuedWrites";
 import {
+  applyEdits,
   buildSetPayload,
   canLog,
   draftAfterSave,
+  editBlockedReason,
+  editSetPayload,
   elapsedMin,
   emptyDraft,
   localSetFrom,
   mergeSets,
   numberToPad,
   padToNumber,
+  pruneEdits,
   pruneLocal,
   resolveEntry,
   sessionExercises,
@@ -58,6 +63,8 @@ import {
   type Draft,
   type DisplaySet,
   type LocalSet,
+  type SetEdit,
+  type SetEdits,
 } from "./logic";
 
 const styles = StyleSheet.create({
@@ -87,8 +94,6 @@ const styles = StyleSheet.create({
     marginTop: space.lg,
     lineHeight: 19,
   },
-  removeNote: { color: color.ink, fontSize: 14, lineHeight: 20, marginBottom: space.lg },
-  removeError: { color: color.bad, fontSize: 13, lineHeight: 19, marginBottom: space.md },
   secondary: { marginTop: space.sm },
   history: { alignSelf: "flex-start", paddingVertical: space.sm },
   historyText: { color: color.accent, fontSize: 12 },
@@ -187,8 +192,18 @@ export function SessionScreen({
   const [noteOpen, setNoteOpen] = useState<Record<string, boolean>>({});
   const [picking, setPicking] = useState(false);
   const [stopping, setStopping] = useState(false);
-  const [removing, setRemoving] = useState<DisplaySet | null>(null);
-  const [removeError, setRemoveError] = useState("");
+  /** The set whose chip was tapped, open in `EditSetSheet`. */
+  const [fixing, setFixing] = useState<DisplaySet | null>(null);
+  const [fixError, setFixError] = useState("");
+  /**
+   * Corrections that are queued but not yet reflected by any source of truth.
+   *
+   * Only ever non-empty for a set that is ALREADY on the server: queueing its
+   * correction changes nothing in `session.sets` until the queue drains and the
+   * session is refetched, and a chip that shows the old figures for a second
+   * after a save reads as "my edit didn't work". See `applyEdits`.
+   */
+  const [edits, setEdits] = useState<SetEdits>({});
   const [showDropped, setShowDropped] = useState(false);
   /**
    * How much of the outbox's dropped list has already been raised.
@@ -215,10 +230,24 @@ export function SessionScreen({
   // ------------------------------------------------------------------- sets
 
   const serverSets = session?.sets ?? NO_SETS;
-  const sets = useMemo(
+  const merged = useMemo(
     () => mergeSets(serverSets, queued.sets, localSets),
     [serverSets, queued.sets, localSets],
   );
+  const sets = useMemo(() => applyEdits(merged, edits), [merged, edits]);
+
+  /*
+   * A correction stops being needed the moment the truth agrees with it, or the
+   * set it names is gone. Run against `merged` and never against `sets`: an
+   * overlay compared with itself always matches, and pruning on that would
+   * clear every correction on the frame it was made.
+   *
+   * `pruneEdits` returns the same object when nothing changed, so this settles
+   * rather than looping.
+   */
+  useEffect(() => {
+    setEdits((current) => pruneEdits(current, merged));
+  }, [merged]);
 
   // Local optimistic rows exist only to cover the gap between the press and
   // SQLite publishing. Once the queue or the server has one, holding a second
@@ -359,11 +388,11 @@ export function SessionScreen({
     [entryFor, draftFor, rest.start],
   );
 
-  // ---------------------------------------------------------------- removal
+  // ------------------------------------------------------- fixing a set
 
   const removeSet = useCallback(
     async (set: DisplaySet) => {
-      setRemoveError("");
+      setFixError("");
       try {
         if (set.id !== null) {
           await apiDelete("/api/sets", { id: set.id });
@@ -375,13 +404,72 @@ export function SessionScreen({
           if (outboxId !== null) await removeQueued(outboxId);
           setLocalSets((current) => current.filter((l) => l.clientId !== set.clientId));
         }
-        setRemoving(null);
+        setFixing(null);
       } catch (err) {
-        setRemoveError(err instanceof Error ? err.message : "Could not remove that set.");
+        setFixError(err instanceof Error ? err.message : "Could not remove that set.");
         tapError();
       }
     },
     [queryClient, queued],
+  );
+
+  /**
+   * A correction, written the same way every other set on this screen is.
+   *
+   * There is no PATCH route: `POST /api/sets` upserts on
+   * `(workout_id, client_id)`, so re-posting the same `clientId` with different
+   * figures IS the edit — and it goes through the outbox, which means a
+   * correction works in the same basement the set was logged in. `editSetPayload`
+   * holds what is and is not sent and why.
+   *
+   * An undelivered set is a different case: its original write is still in the
+   * queue and must be dropped, or the old figures would be delivered first and
+   * this would arrive as a second write of the same row. Dropping it is also why
+   * the payload has to carry the note and the raw text forward — the original is
+   * the only place they exist.
+   */
+  const saveFix = useCallback(
+    async (set: DisplaySet, edit: SetEdit) => {
+      const reason = editBlockedReason(edit);
+      if (reason !== null) {
+        setFixError(reason);
+        tapError();
+        return;
+      }
+
+      setFixError("");
+      const outboxId = queued.idOf(set.clientId);
+      const payload = editSetPayload(
+        set,
+        edit,
+        outboxId === null ? null : queued.payloadOf(set.clientId),
+      );
+
+      // The haptic and the redraw come before the await, exactly as they do for
+      // a new set: the user is standing at a rack, and the thing that says the
+      // fix landed has to be the press.
+      tapSave();
+      setEdits((current) => ({ ...current, [set.clientId]: edit }));
+      setFixing(null);
+
+      try {
+        if (outboxId !== null) await removeQueued(outboxId);
+        await enqueue("set", "/api/sets", { ...payload });
+      } catch (err) {
+        // SQLite itself failing. Put the chip back to the truth rather than
+        // leaving an overlay that claims a write nobody has.
+        console.error("[lift] could not queue a correction", err);
+        setEdits((current) => {
+          const next = { ...current };
+          delete next[set.clientId];
+          return next;
+        });
+        setFixError(err instanceof Error ? err.message : "Could not save that fix.");
+        setFixing(set);
+        tapError();
+      }
+    },
+    [queued],
   );
 
   // --------------------------------------------------------------- the pad
@@ -605,9 +693,9 @@ export function SessionScreen({
 
                 <SetPills
                   sets={setsForExercise(sets, exercise.id)}
-                  onLongPressSet={(set) => {
-                    setRemoveError("");
-                    setRemoving(set);
+                  onPressSet={(set) => {
+                    setFixError("");
+                    setFixing(set);
                   }}
                 />
 
@@ -717,26 +805,31 @@ export function SessionScreen({
         />
       </Modal>
 
-      <Sheet
-        visible={removing !== null}
-        onClose={() => setRemoving(null)}
-        title="Remove this set?"
-      >
-        {removeError !== "" && <Text style={styles.removeError}>{removeError}</Text>}
-        <Text style={styles.removeNote}>
-          {removing === null
-            ? ""
-            : removing.id === null
-              ? "It has not reached the server yet, so it will just be dropped from the queue."
-              : "It will be deleted from the session."}
-        </Text>
-        <Button variant="danger" size="lg" onPress={() => void removeSet(removing as DisplaySet)}>
-          REMOVE
-        </Button>
-        <Button variant="ghost" style={styles.secondary} onPress={() => setRemoving(null)}>
-          KEEP IT
-        </Button>
-      </Sheet>
+      {/*
+        Tapping a chip under the card opens this. It replaced a sheet that could
+        only say "Remove this set?" — the owner asked to be able to fix a figure
+        they had typed wrong, and a delete-and-relog was the only way to do it,
+        which also moved the set to the end of the session.
+
+        It carries its own `NumberPad`, so it is rendered outside the pager for
+        the same reason the card's pad is: one instance for the whole screen,
+        because three mounted copies is three modals racing to present.
+      */}
+      <EditSetSheet
+        set={fixing}
+        unit={padUnits[fixing?.exerciseId ?? ""] ?? "lb"}
+        onUnitChange={(next) => {
+          if (fixing === null) return;
+          setPadUnits((current) => ({ ...current, [fixing.exerciseId]: next }));
+        }}
+        error={fixError}
+        onSave={(edit) => void saveFix(fixing as DisplaySet, edit)}
+        onRemove={() => void removeSet(fixing as DisplaySet)}
+        onClose={() => {
+          setFixError("");
+          setFixing(null);
+        }}
+      />
 
       <Sheet
         visible={showDropped}

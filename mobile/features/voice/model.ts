@@ -7,6 +7,7 @@
  * not get tested.
  */
 import { classifyStatus, newClientId } from "../../lib/shared/outbox";
+import { kindFlags, setKindOf, type SetKind } from "../../lib/set-kind";
 import type { ParseResponse, SetWrite } from "../../lib/types";
 
 /**
@@ -449,30 +450,30 @@ export function aliasToLearn(
 
 // ------------------------------------------------------------- set kind
 
-/** Warmup, working or to failure — one question with three answers. */
-export type SetKind = "warmup" | "working" | "failure";
-
-/**
- * The kind a row currently is.
+/*
+ * The rule itself moved to `lib/set-kind.ts`.
  *
- * `isWarmup && toFailure` is meaningless and unreachable through the control,
- * but a parse can produce it ("warmup set to failure"). It resolves to
- * `failure`, which is the louder of the two and the one that matters to
- * progression; `kindPatch` then clears the warmup flag the next time the user
- * touches it.
+ * It was written here first, for this sheet, and then the live session card
+ * turned out to have the same pair of flags behind two independent pill
+ * toggles — so the owner managed to turn WARMUP and TO FAILURE on at the same
+ * time, which is the state this sheet had already made unreachable. Two
+ * controls over one pair of columns cannot be guaranteed to agree unless they
+ * share the function, so they now do.
+ *
+ * The two wrappers below stay because they are typed in this module's terms:
+ * `setKind` takes a whole `LogRow` and `kindPatch` returns a `RowPatch`, which
+ * is what `patchRow` and `patchGroup` accept. They add no rule of their own.
  */
+export type { SetKind } from "../../lib/set-kind";
+
+/** The kind a row currently is. See `setKindOf`. */
 export function setKind(row: LogRow): SetKind {
-  if (row.toFailure) return "failure";
-  if (row.isWarmup) return "warmup";
-  return "working";
+  return setKindOf(row);
 }
 
 /** The two flags for a kind. Always both, so the pair cannot drift apart. */
 export function kindPatch(kind: SetKind): RowPatch {
-  return {
-    isWarmup: kind === "warmup",
-    toFailure: kind === "failure",
-  };
+  return kindFlags(kind);
 }
 
 // ---------------------------------------------------------------- rpe

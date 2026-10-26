@@ -1,10 +1,9 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
-import { Button, Sheet, color, hit, radius, space, tnum } from "@/components/ui";
+import { Button, Segmented, Sheet, color, hit, radius, space, tnum } from "@/components/ui";
+import type { Segment } from "@/components/ui";
 import { microLabel } from "@/components/ui/Label";
 import { tapSelect } from "@/lib/haptics";
-import { Segmented } from "./Segmented";
-import type { Segment } from "./Segmented";
 import {
   RPE_CHOICES,
   kindPatch,
