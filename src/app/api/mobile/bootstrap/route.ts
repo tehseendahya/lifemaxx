@@ -1,7 +1,7 @@
 import { route } from "@/lib/api";
 import { preflight } from "@/lib/auth/cors";
 import { db } from "@/db";
-import { exerciseMuscles, exercises, sets, workouts } from "@/db/schema";
+import { exerciseMuscles, exercises, sets, stravaAccounts, workouts } from "@/db/schema";
 import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import {
   getProfile, getActiveTarget, getDayMeals, sumMacros, getMuscleVolume,
@@ -44,7 +44,7 @@ export const GET = route(async ({ userId, tz, today }) => {
   const [
     profile, target, meals, volume, tdee, proteinFloor,
     active, runs, lowerBodyLiftDates, gymList, catalogueRows, lastSets,
-    weighInSeries, intakeSeries, hardSetDays, mainLiftSeries, cues, recentWorkouts,
+    weighInSeries, intakeSeries, hardSetDays, mainLiftSeries, cues, recentWorkouts, stravaRows,
   ] = await Promise.all([
     getProfile(userId),
     getActiveTarget(userId, today),
@@ -56,7 +56,7 @@ export const GET = route(async ({ userId, tz, today }) => {
     getRuns(userId, today),
     getLowerBodyLiftDates(userId, today),
     getGyms(userId),
-    // The same catalogue query src/app/lift/page.tsx runs — the user's own
+    // The catalogue the retired web Lift page used to read — the user's own
     // exercises plus the shared ones — with the increment the number pad needs.
     db.select({
       id: exercises.id,
@@ -109,6 +109,11 @@ export const GET = route(async ({ userId, tz, today }) => {
      * it reads now, and what a workout is deleted from.
      */
     getRecentWorkouts(userId),
+
+    // Whether Strava is linked, for the Settings row. Presence only: the tokens
+    // in this table never leave the server.
+    db.select({ userId: stravaAccounts.userId }).from(stravaAccounts)
+      .where(eq(stravaAccounts.userId, userId)).limit(1),
   ]);
 
   const muscleMap = await muscleMapFor(catalogueRows.map((row) => row.id));
@@ -171,6 +176,7 @@ export const GET = route(async ({ userId, tz, today }) => {
     })),
     lastSets,
     recentWorkouts,
+    stravaConnected: stravaRows.length > 0,
 
     /**
      * Carry-forward cues, keyed by exercise id. Lifts without one are ABSENT

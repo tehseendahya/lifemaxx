@@ -31,14 +31,6 @@ body {
   color: var(--color-ink);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
-  /* Room for the fixed tab bar plus the iPhone home indicator. */
-  padding-bottom: calc(4.5rem + env(safe-area-inset-bottom));
-}
-
-/* The tab bar becomes a left rail at this width, so the gutter it reserved at
-   the bottom is dead space. Matches the lg: breakpoint the nav switches on. */
-@media (min-width: 1024px) {
-  body { padding-bottom: 3rem; }
 }
 
 /* Numbers that line up in columns — weights, macros, set counts. */
