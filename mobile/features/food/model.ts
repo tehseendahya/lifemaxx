@@ -14,6 +14,7 @@
  * the same reason.
  */
 import type { MacroTotals, MealDto, MealItemDto } from "../../lib/types";
+import type { UpdateMealInput } from "./types";
 
 export type MealSlot = "breakfast" | "lunch" | "dinner" | "snack";
 
@@ -156,6 +157,155 @@ export function patchItem(
 
 export function removeItem(items: readonly DraftItem[], key: string): DraftItem[] {
   return items.filter((i) => i.key !== key);
+}
+
+/** "Describe it" in the editor: whatever the analysis returned goes on the end. */
+export function appendItems(items: readonly DraftItem[], added: readonly AnalyzedItem[]): DraftItem[] {
+  return [...items, ...toDraft(added)];
+}
+
+// ------------------------------------------------------------- item editing
+
+/**
+ * A new quantity for an item, with its macros carried along proportionally.
+ *
+ * "Chicken thigh 200 g · 410 kcal" becoming 300 g has to become 615 kcal by
+ * itself, or the quantity field is decoration and the user does the arithmetic
+ * — which is the job MacroFactor and Cal AI do for you, and the one the owner
+ * asked for. Editing a macro directly never touches the quantity: that is a
+ * correction to the estimate, not a different portion.
+ *
+ * When the item had no quantity (the model returned null, or a typed-in item),
+ * or a zero one, there is nothing to scale FROM, so the first figure is simply
+ * recorded and becomes the basis for the next change. A zero or non-finite new
+ * quantity is refused (the item comes back unchanged): scaling to zero would
+ * erase the macros and leave nothing to scale back from.
+ *
+ * kcal is rounded to an integer — `meal_items.kcal` is an integer column and
+ * the server rounds it anyway — and grams to a tenth, which is the precision
+ * the model reports them at.
+ */
+export function scaleItem(item: DraftItem, qty: number | null): DraftItem {
+  if (qty === null) return { ...item, qty: null };
+  if (!Number.isFinite(qty) || qty <= 0) return item;
+  if (item.qty === null || !Number.isFinite(item.qty) || item.qty <= 0) return { ...item, qty };
+
+  const k = qty / item.qty;
+  return {
+    ...item,
+    qty,
+    kcal: Math.round(item.kcal * k),
+    proteinG: round1(item.proteinG * k),
+    carbsG: round1(item.carbsG * k),
+    fatG: round1(item.fatG * k),
+  };
+}
+
+function round1(n: number): number {
+  return Math.round(n * 10) / 10;
+}
+
+/** "200 g", "1.5 cup", or "—" when there is no quantity to tap and change. */
+export function formatQty(item: Pick<DraftItem, "qty" | "unit">): string {
+  if (item.qty === null || !Number.isFinite(item.qty)) return "—";
+  const qty = Math.round(item.qty * 100) / 100;
+  const unit = item.unit !== null && item.unit.trim() !== "" ? ` ${item.unit.trim()}` : "";
+  return `${qty}${unit}`;
+}
+
+/**
+ * Two item lists that would save the same rows.
+ *
+ * Keys are ignored (they are React's, minted per load), and names are compared
+ * trimmed because that is how `toAnalyzed` writes them — typing a trailing
+ * space and deleting it again is not an edit.
+ */
+export function sameItems(a: readonly DraftItem[], b: readonly DraftItem[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((x, i) => {
+    const y = b[i];
+    return x.name.trim() === y.name.trim()
+      && x.qty === y.qty
+      && (x.unit ?? "") === (y.unit ?? "")
+      && x.kcal === y.kcal
+      && x.proteinG === y.proteinG
+      && x.carbsG === y.carbsG
+      && x.fatG === y.fatG;
+  });
+}
+
+/** A logged meal, as the item editor holds it while the user changes it. */
+export interface MealDraft {
+  slot: MealSlot;
+  note: string;
+  items: DraftItem[];
+}
+
+export function draftFromMeal(meal: MealDto): MealDraft {
+  return {
+    slot: asMealSlot(meal.slot),
+    note: meal.note,
+    items: toDraft(analyzedFromMealItems(meal.items)),
+  };
+}
+
+/**
+ * Whether SAVE CHANGES means anything, and whether closing the sheet would
+ * throw work away (which is when it asks "Discard changes?").
+ */
+export function isDirty(original: MealDraft, draft: MealDraft): boolean {
+  return original.slot !== draft.slot
+    || original.note.trim() !== draft.note.trim()
+    || !sameItems(original.items, draft.items);
+}
+
+export const EMPTY_MEAL_HINT = "A meal needs at least one item. Delete the meal instead.";
+
+/**
+ * Why SAVE CHANGES is disabled, as a sentence — or null when it is not.
+ *
+ * Empty items get words because the route refuses them and the fix is a
+ * different button; an unchanged draft gets none, because a disabled save on
+ * an untouched meal explains itself.
+ */
+export function saveBlockedReason(draft: MealDraft): string | null {
+  return draft.items.length === 0 ? EMPTY_MEAL_HINT : null;
+}
+
+export function canSaveEdit(original: MealDraft, draft: MealDraft): boolean {
+  return saveBlockedReason(draft) === null && isDirty(original, draft);
+}
+
+/** The body of `POST /api/mobile/meal`. No image field exists on this path either. */
+export function updatePayload(id: string, draft: MealDraft): UpdateMealInput {
+  return { id, slot: draft.slot, note: draft.note.trim(), items: toAnalyzed(draft.items) };
+}
+
+export const SLOT_LABELS: Record<MealSlot, string> = {
+  breakfast: "Breakfast",
+  lunch: "Lunch",
+  dinner: "Dinner",
+  snack: "Snack",
+};
+
+/** "Lunch · 640 kcal · 52 P · 61 C · 18 F" — the editor's live title. */
+export function editorHeadline(slot: MealSlot, items: readonly DraftItem[]): string {
+  const t = draftTotals(items);
+  return `${SLOT_LABELS[slot]} · ${Math.round(t.kcal)} kcal · ${Math.round(t.proteinG)} P · ${Math.round(t.carbsG)} C · ${Math.round(t.fatG)} F`;
+}
+
+/**
+ * Whether a file the image picker handed back is one this app may delete.
+ *
+ * The camera's file is always ours. A library pick is a copy the picker wrote
+ * into the app's cache — but deleting the user's ORIGINAL photo would be a far
+ * worse bug than leaving a temp file behind, so a library URI is only deleted
+ * when it is provably inside the cache directory.
+ */
+export function isScratchUri(uri: string, cacheRoot: string): boolean {
+  if (!uri.startsWith("file://") || cacheRoot === "") return false;
+  const root = cacheRoot.endsWith("/") ? cacheRoot : `${cacheRoot}/`;
+  return uri.startsWith(root) && !uri.slice(root.length).split("/").includes("..");
 }
 
 // ----------------------------------------------------------------- arithmetic

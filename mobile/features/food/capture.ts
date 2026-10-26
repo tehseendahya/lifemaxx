@@ -1,11 +1,11 @@
 import * as ImagePicker from "expo-image-picker";
 import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
-import { File } from "expo-file-system";
+import { File, Paths } from "expo-file-system";
 
-import { resizeForLongestEdge } from "./model";
+import { isScratchUri, resizeForLongestEdge } from "./model";
 
 /**
- * Camera → a base64 JPEG data URL, and nothing else.
+ * Camera or library → a base64 JPEG data URL, and nothing else.
  *
  * ── THE RULE THIS FILE EXISTS TO ENFORCE ────────────────────────────────────
  *
@@ -23,8 +23,8 @@ import { resizeForLongestEdge } from "./model";
  * cleans up too.
  *
  * This function never returns a file URI and never logs one. The only thing
- * that escapes it is the data URL, which the caller holds in React state and
- * drops on save or cancel.
+ * that escapes it is the data URL, which the composer holds in React state and
+ * drops on save, on cancel and on unmount.
  */
 
 /** 1024px at q0.8 lands around 120KB. */
@@ -66,10 +66,64 @@ export async function captureMealPhoto(): Promise<CaptureOutcome> {
   const asset = result.assets[0];
   if (!asset) return { status: "failed", message: "The camera returned no photo." };
 
+  // The camera's file is always ours: it exists only because we asked for it.
+  return processAsset(asset, true);
+}
+
+/**
+ * A photo already taken, from the library.
+ *
+ * Needs no permission prompt: on iOS 14+ the picker runs out of process and
+ * hands back only the photo the user chose, which is also why it works in Expo
+ * Go. Same options and the same resize-encode-discard path as the camera, so a
+ * library photo is held to exactly the same rule — it becomes a data URL in
+ * memory and every file this capture produced is deleted.
+ */
+export async function pickMealPhoto(): Promise<CaptureOutcome> {
+  const result = await ImagePicker.launchImageLibraryAsync({
+    mediaTypes: ["images"],
+    quality: 1,
+    exif: false,
+    base64: false,
+    allowsEditing: false,
+    allowsMultipleSelection: false,
+  });
+
+  if (result.canceled) return { status: "cancelled" };
+
+  const asset = result.assets[0];
+  if (!asset) return { status: "failed", message: "No photo was picked." };
+
+  // The picker copies the chosen photo into our cache, and that copy is
+  // scratch. The original is the user's, though, so the picker's file is
+  // deleted only when it is provably inside the cache — see `isScratchUri`.
+  return processAsset(asset, isScratchUri(asset.uri, cacheRoot()));
+}
+
+/** `""` when the cache directory cannot be resolved, which `isScratchUri` refuses. */
+function cacheRoot(): string {
+  try {
+    return Paths.cache.uri;
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Picker asset → resized JPEG data URL, deleting every file on the way.
+ *
+ * Shared by the camera and the library so the two cannot drift: one resize,
+ * one encode, one cleanup. `assetIsScratch` says whether the picker's own file
+ * may be deleted; the resizer's output is always ours and always deleted.
+ */
+async function processAsset(
+  asset: ImagePicker.ImagePickerAsset,
+  assetIsScratch: boolean,
+): Promise<CaptureOutcome> {
   // Everything written to disk during this capture, deleted unconditionally
   // below. The picker's file is already on disk by the time we get here, so it
   // goes in before anything can throw.
-  const scratch: string[] = [asset.uri];
+  const scratch: string[] = assetIsScratch ? [asset.uri] : [];
 
   try {
     const resize = resizeForLongestEdge(asset.width, asset.height, MAX_EDGE);
