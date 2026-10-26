@@ -60,6 +60,10 @@ const styles = StyleSheet.create({
 
   secondary: { marginTop: space.sm },
   remove: { marginTop: space.lg },
+  /** The second-press line above REMOVE, when removing ends the workout. */
+  warning: {
+    color: color.ink, fontSize: 14, lineHeight: 20, marginTop: space.lg, marginBottom: space.md,
+  },
 });
 
 const RPE_SEGMENTS: readonly Segment<number | null>[] = [
@@ -116,6 +120,16 @@ type Pad = "weight" | "reps" | null;
  * — "same as last time plus five" — and that is the card's job. This is the
  * mistyped-figure path, so each figure is a tap target that opens the pad, in
  * whichever unit the card was last typing in for this exercise.
+ *
+ * ── TWO MODES ──────────────────────────────────────────────────────────────
+ *
+ * The past-workout screen reuses this sheet for both of its set editors, so a
+ * figure is typed the same way everywhere. `mode="edit"` (the default, and the
+ * only mode the live session uses) fixes an existing set. `mode="add"` is
+ * "+ Add set" on a finished workout: the sheet opens on a prefill dressed as a
+ * set (see `features/workout/model.ts`), titled "Add a set", savable without a
+ * change because the prefill IS the set being added, and with no REMOVE —
+ * there is nothing yet to remove.
  */
 export function EditSetSheet({
   set,
@@ -125,6 +139,9 @@ export function EditSetSheet({
   onSave,
   onRemove,
   onClose,
+  mode = "edit",
+  removeWarning = null,
+  pending = false,
 }: {
   /** The set being fixed. `null` closes the sheet. */
   set: DisplaySet | null;
@@ -135,10 +152,24 @@ export function EditSetSheet({
   onSave: (edit: SetEdit) => void;
   onRemove: () => void;
   onClose: () => void;
+  mode?: "edit" | "add";
+  /**
+   * When removing this set does more than remove a set — the past-workout
+   * screen's last set, whose removal deletes the workout. REMOVE then asks
+   * twice: the first press shows this sentence, the second does it.
+   */
+  removeWarning?: string | null;
+  /**
+   * A direct request is in flight (the past-workout screen; the live session
+   * queues and never waits). Buttons hold still so a second press cannot send
+   * a second write.
+   */
+  pending?: boolean;
 }) {
   const [edit, setEdit] = useState<SetEdit | null>(null);
   const [pad, setPad] = useState<Pad>(null);
   const [padValue, setPadValue] = useState("");
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
 
   /*
    * Seeded from the set's KEY, not from the set itself.
@@ -154,6 +185,7 @@ export function EditSetSheet({
   useEffect(() => {
     setPad(null);
     setPadValue("");
+    setConfirmingRemove(false);
     // `set` is read here and deliberately not a dependency; `key` stands in
     // for it. There is no eslint in this project to tell about that, so this
     // comment is the only thing stopping someone adding `set` back.
@@ -187,13 +219,20 @@ export function EditSetSheet({
         in this app: `Sheet` plays its own exit animation, which it cannot do if
         the parent stops rendering it the moment the set goes away.
       */}
-      <Sheet visible={set !== null} onClose={onClose} title="Fix this set">
+      <Sheet
+        visible={set !== null}
+        onClose={onClose}
+        title={mode === "add" ? "Add a set" : "Fix this set"}
+      >
         {set !== null && edit !== null ? (
           <Body
             set={set}
             edit={edit}
             unit={unit}
             error={error}
+            mode={mode}
+            pending={pending}
+            removeWarning={confirmingRemove ? removeWarning : null}
             onPatch={(patch) => setEdit({ ...edit, ...patch })}
             onOpenPad={(field) => {
               tapSelect();
@@ -205,7 +244,15 @@ export function EditSetSheet({
               setPad(field);
             }}
             onSave={() => onSave(edit)}
-            onRemove={onRemove}
+            onRemove={() => {
+              // Two presses only when the removal takes the workout with it.
+              if (removeWarning !== null && !confirmingRemove) {
+                tapSelect();
+                setConfirmingRemove(true);
+                return;
+              }
+              onRemove();
+            }}
             onClose={onClose}
           />
         ) : null}
@@ -256,6 +303,9 @@ function Body({
   edit,
   unit,
   error,
+  mode,
+  pending,
+  removeWarning,
   onPatch,
   onOpenPad,
   onSave,
@@ -266,6 +316,10 @@ function Body({
   edit: SetEdit;
   unit: WeightUnit;
   error: string;
+  mode: "edit" | "add";
+  pending: boolean;
+  /** Shown above REMOVE once it has been pressed and needs a second press. */
+  removeWarning: string | null;
   onPatch: (patch: Partial<SetEdit>) => void;
   onOpenPad: (field: "weight" | "reps") => void;
   onSave: () => void;
@@ -273,7 +327,15 @@ function Body({
   onClose: () => void;
 }) {
   const blocked = editBlockedReason(edit);
-  const dirty = editChanged(set, edit);
+  const adding = mode === "add";
+  // An added set has nothing to differ from: the prefill is a proposal, and
+  // accepting it unchanged is the common case (a fourth set of 185 × 5).
+  const dirty = adding || editChanged(set, edit);
+  const canSave = blocked === null && dirty && !pending;
+
+  const saveLabel = adding
+    ? (pending ? "ADDING…" : "ADD SET")
+    : pending ? "SAVING…" : dirty ? "SAVE THE FIX" : "NOTHING CHANGED";
 
   return (
     <>
@@ -331,33 +393,45 @@ function Body({
         <Text style={styles.error}>{blocked}</Text>
       ) : (
         <Text style={styles.fate}>
-          {set.id === null
-            ? "This set has not reached the server yet, so the fix replaces the write that is still waiting."
-            : "The set keeps its place in the session — only the figures change."}
+          {adding
+            ? "Added after the last set in this workout."
+            : set.id === null
+              ? "This set has not reached the server yet, so the fix replaces the write that is still waiting."
+              : "The set keeps its place in the session — only the figures change."}
         </Text>
       )}
 
       <Button
         size="lg"
         onPress={() => {
-          if (blocked !== null || !dirty) {
+          if (!canSave) {
             tapError();
             return;
           }
           onSave();
         }}
-        disabled={blocked !== null || !dirty}
+        disabled={!canSave}
       >
-        {dirty ? "SAVE THE FIX" : "NOTHING CHANGED"}
+        {saveLabel}
       </Button>
 
-      <Button variant="ghost" style={styles.secondary} onPress={onClose}>
+      <Button variant="ghost" style={styles.secondary} onPress={onClose} disabled={pending}>
         CANCEL
       </Button>
 
-      <Button variant="danger" style={styles.remove} onPress={onRemove}>
-        REMOVE THIS SET
-      </Button>
+      {!adding && (
+        <>
+          {removeWarning !== null && <Text style={styles.warning}>{removeWarning}</Text>}
+          <Button
+            variant="danger"
+            style={removeWarning === null ? styles.remove : undefined}
+            onPress={onRemove}
+            disabled={pending}
+          >
+            {removeWarning !== null ? "REMOVE AND DELETE WORKOUT" : "REMOVE THIS SET"}
+          </Button>
+        </>
+      )}
     </>
   );
 }
