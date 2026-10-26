@@ -558,6 +558,26 @@ describe("matchExercise: nicknames", () => {
   it("is a whole-word lookup, not a property lookup", () => {
     expect(matchExercise("constructor 225", REAL)).toBeNull();
   });
+
+  it("does not turn a bodyweight sentence into a lift goal", () => {
+    // The nickname table made this a 175 lb BENCH target: a nickname match
+    // counts as naming an exercise, which withholds the bodyweight reading.
+    expect(matchExercise("cut to 175 without losing my bench", REAL)).toBeNull();
+    expect(matchExercise("bulk to 190 and keep my squat", REAL)).toBeNull();
+  });
+
+  it("still reads 'up to' with a nicknamed lift as that lift", () => {
+    // Why the guard is narrower than the bodyweight cue: "up to" belongs to
+    // lift goals as often as to bodyweight ones.
+    expect(matchExercise("get my squat up to 315 by May", REAL)?.id).toBe("back-squat");
+  });
+});
+
+describe("bodyweight sentences that mention a lift", () => {
+  it("come out as a bodyweight goal, not a lift goal", () => {
+    const [claim] = extract("Cut to 175 without losing my bench").claims;
+    expect(claim).toMatchObject({ kind: "bodyweight", targetLb: 175 });
+  });
 });
 
 describe("the goals bug, end to end", () => {

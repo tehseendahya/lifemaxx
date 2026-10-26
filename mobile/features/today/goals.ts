@@ -563,11 +563,27 @@ const NICKNAME_QUALIFIERS = new Set([
   "sumo", "romanian", "rdl", "trap", "machine", "cable",
 ]);
 
+/**
+ * Words that make a sentence about BODYWEIGHT, so a nickname in it is context
+ * rather than the target.
+ *
+ * Without this, the nickname table turned "cut to 175 without losing my bench"
+ * into a 175 lb bench goal: a nickname match counts as naming an exercise, and
+ * naming an exercise is exactly what withholds the bodyweight reading in
+ * `claimsFor`. The list is deliberately narrower than `BODYWEIGHT_CUE` — "up
+ * to", "get to" and "down to" are left out because "get my squat up to 315"
+ * says them too, and that one genuinely is a squat goal.
+ */
+const BODYWEIGHT_WORDS = new Set([
+  "weigh", "bodyweight", "cut", "cutting", "bulk", "bulking", "lose", "losing",
+]);
+
 function nicknameMatch(
   words: Set<string>,
   catalogue: CatalogueExercise[],
 ): CatalogueExercise | null {
   for (const w of words) if (NICKNAME_QUALIFIERS.has(w)) return null;
+  for (const w of words) if (BODYWEIGHT_WORDS.has(w)) return null;
 
   const slugs = new Set<string>();
   for (const w of words) {
