@@ -22,7 +22,7 @@
 
 import { WEEKLY_SET_TARGET, deriveWorkoutName } from "../../lib/shared/muscles";
 import type { CountedSet } from "../../lib/shared/muscles";
-import type { Bootstrap, LastSet, RankedMuscle } from "../../lib/types";
+import type { Bootstrap, LastSet, RankedMuscle, RecentWorkoutDto } from "../../lib/types";
 import { extractGoalClaims } from "../today/goals";
 import { formatShortDate, liftDaysIn, plural, strengthRows } from "../today/model";
 import type { StrengthRow } from "../today/model";
@@ -226,11 +226,58 @@ export interface LastSession {
 }
 
 /**
- * The last completed session, from `bootstrap.lastSets` only.
+ * The last completed session — the newest real workout.
+ *
+ * ── HOW THIS USED TO GO WRONG ──────────────────────────────────────────────
+ *
+ * This card was rebuilt from `bootstrap.lastSets`: the newest date among each
+ * exercise's last session was taken to BE the last session, and every
+ * exercise carrying that date was drawn as one workout. So any two workouts
+ * sharing a date became one card. That is what the owner saw — chest and
+ * biceps one day, back and triceps the next, drawn as a single session named
+ * after all four — because the server's timezone was still the New York
+ * default and both carried the same date. It would also have merged a genuine
+ * two-a-day with every date correct.
+ *
+ * It now reads `bootstrap.recentWorkouts`, which the server groups by workout
+ * id, and takes the first one. The old reconstruction below survives only as
+ * the fallback for a bootstrap that predates the field.
+ */
+export function lastSessionBlock(b: Bootstrap): LastSession | null {
+  if (b.recentWorkouts !== undefined) {
+    const latest = b.recentWorkouts.find((w) => w.exercises.length > 0);
+    return latest === undefined ? null : sessionFromWorkout(latest, b);
+  }
+  return lastSessionFromLastSets(b);
+}
+
+/** One server workout as the card draws it. */
+function sessionFromWorkout(w: RecentWorkoutDto, b: Bootstrap): LastSession {
+  const byId = new Map(b.catalogue.map((e) => [e.id, e]));
+  const rows = w.exercises.map((e) => ({
+    exerciseId: e.exerciseId,
+    name: byId.get(e.exerciseId)?.name ?? "Exercise",
+    sets: e.sets,
+    detail: setLine({ ...e, localDate: w.localDate, bestE1rmLb: null }),
+  }));
+  return {
+    date: w.localDate,
+    // The server's name, which STOP or the idle close derived from what the
+    // workout actually hit — not a name re-derived from a reconstruction.
+    name: w.name,
+    when: `${relativeDay(w.localDate, b.today)} · ${formatShortDate(w.localDate)}`,
+    rows,
+    exerciseIds: rows.map((r) => r.exerciseId),
+  };
+}
+
+/**
+ * The pre-`recentWorkouts` reconstruction, kept for an old cached bootstrap.
  *
  * No new endpoint: `lastSets[id].localDate` is already that exercise's most
  * recent completed workout, so the newest of those dates IS the last session
- * and the entries carrying it are its lifts.
+ * and the entries carrying it are its lifts — which is exactly the assumption
+ * that breaks when two workouts share a date.
  *
  * The one consequence worth stating: `lastSetPerExercise` filters
  * `workouts.status = "completed"`, so a session still open does not appear
@@ -240,7 +287,7 @@ export interface LastSession {
  * Returns `null` rather than an empty block, because "no completed sessions
  * yet" is a different sentence from "a session with no lifts in it".
  */
-export function lastSessionBlock(b: Bootstrap): LastSession | null {
+function lastSessionFromLastSets(b: Bootstrap): LastSession | null {
   const entries = Object.entries(b.lastSets ?? {});
   if (entries.length === 0) return null;
 
@@ -295,6 +342,65 @@ export function lastSessionBlock(b: Bootstrap): LastSession | null {
 const setLine = (s: LastSet): string =>
   `${fmtWeight(s.weightLb)} × ${s.reps} × ${plural(s.sets, "set")}` +
   (s.rpe !== null ? ` @${s.rpe}` : "");
+
+// ------------------------------------------------------ recent workouts
+
+export interface RecentWorkoutRow {
+  id: string;
+  name: string;
+  /** `today · 26 Oct`, `yesterday · 25 Oct`, `4d ago · 21 Oct`. */
+  when: string;
+  /** `12 sets · Bench Press, Curl +2`. */
+  summary: string;
+  /** For the delete sheet's confirmation line: exactly what goes. */
+  workingSets: number;
+  lifts: string[];
+}
+
+/**
+ * The past workouts the Lift tab lists, each one a thing that can be deleted.
+ *
+ * One row per WORKOUT, never per date — two sessions in a day are two rows.
+ * Unlike the Last session card, a workout with no working sets is listed: a
+ * session of nothing but warmups is precisely the sort of mistake someone
+ * opens this list to remove.
+ *
+ * Empty when the server has not sent the field. There is nothing honest to
+ * delete from a reconstruction.
+ */
+export function recentWorkoutRows(b: Bootstrap): RecentWorkoutRow[] {
+  const byId = new Map(b.catalogue.map((e) => [e.id, e]));
+  return (b.recentWorkouts ?? []).map((w) => {
+    const lifts = w.exercises.map((e) => byId.get(e.exerciseId)?.name ?? "Exercise");
+    const shown = lifts.slice(0, 2).join(", ");
+    const more = lifts.length > 2 ? ` +${lifts.length - 2}` : "";
+    return {
+      id: w.id,
+      name: w.name,
+      when: `${relativeDay(w.localDate, b.today)} · ${formatShortDate(w.localDate)}`,
+      summary: lifts.length === 0
+        ? `${plural(w.workingSets, "set")} · warmups only`
+        : `${plural(w.workingSets, "set")} · ${shown}${more}`,
+      workingSets: w.workingSets,
+      lifts,
+    };
+  });
+}
+
+/**
+ * What the delete sheet says before anything goes.
+ *
+ * The count is the point. "Delete this workout?" alone does not tell the owner
+ * whether they are about to lose one stray set or an hour of training, and
+ * there is no undo — the sets cascade with the row.
+ */
+export function deleteWorkoutPrompt(row: RecentWorkoutRow): string {
+  const what =
+    row.workingSets === 0 ? "Its warmup sets"
+    : row.workingSets === 1 ? "Its 1 set"
+    : `All ${plural(row.workingSets, "set")}`;
+  return `${what} will be deleted with it. This cannot be undone.`;
+}
 
 // --------------------------------------------------------- block 3: main lifts
 

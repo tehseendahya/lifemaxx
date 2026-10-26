@@ -70,6 +70,32 @@ export interface CatalogueExercise {
  * `weightLb`/`reps` are the session's modal set rather than its heaviest or its
  * last, which is what makes a one-tap repeat land on the work you actually did.
  */
+/**
+ * One past workout, as a workout — `bootstrap.recentWorkouts`.
+ *
+ * The Lift tab used to rebuild "the last session" from `lastSets` by date,
+ * which glued any two workouts sharing a date into one. These come from the
+ * `workouts` table directly, grouped by workout id. Mirrors `RecentWorkout`
+ * in `src/lib/recent-workouts.ts`.
+ */
+export interface RecentWorkoutDto {
+  id: string;
+  name: string;
+  /** `YYYY-MM-DD` in the user's timezone. */
+  localDate: string;
+  startedAt: string;
+  durationMin: number | null;
+  workingSets: number;
+  /** In the order they were first performed. Warmup-only lifts are absent. */
+  exercises: {
+    exerciseId: string;
+    sets: number;
+    weightLb: number;
+    reps: number;
+    rpe: number | null;
+  }[];
+}
+
 export interface LastSet {
   localDate: string;
   weightLb: number;
@@ -158,6 +184,14 @@ export interface Bootstrap {
   gyms: GymDto[];
   catalogue: CatalogueExercise[];
   lastSets: Record<string, LastSet>;
+  /**
+   * The last ten completed workouts, newest first.
+   *
+   * Optional because a cached bootstrap from before the field existed, or an
+   * older server, sends nothing — and that has to render as the old card, not
+   * crash. `lastSessionBlock` falls back to `lastSets` when it is absent.
+   */
+  recentWorkouts?: RecentWorkoutDto[];
   /**
    * Carry-forward cues, keyed by exercise id.
    *

@@ -1,18 +1,23 @@
 import { useState } from "react";
 import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
+import { useQueryClient } from "@tanstack/react-query";
 
 import {
   Button, Card, Chart, Label, Screen, Sheet, Sparkline,
   color, hit, microLabel, space, tnum,
 } from "@/components/ui";
 import { QuickLog } from "@/features/voice";
-import { tapSelect } from "@/lib/haptics";
+import { apiDelete } from "@/lib/api";
+import { tapError, tapSave, tapSelect } from "@/lib/haptics";
+import { queryKeys } from "@/lib/query";
 import type { Bootstrap, GymDto } from "@/lib/types";
 
 import { ExercisePicker } from "./ExercisePicker";
-import { lastSessionBlock, mainLiftRows, nextUpBlock } from "./next";
-import type { MainLiftRow } from "./next";
+import {
+  deleteWorkoutPrompt, lastSessionBlock, mainLiftRows, nextUpBlock, recentWorkoutRows,
+} from "./next";
+import type { MainLiftRow, RecentWorkoutRow } from "./next";
 
 /** The strength sparkline's height, matching Today's. One point draws one dot. */
 const SPARK_H = 32;
@@ -92,6 +97,14 @@ const styles = StyleSheet.create({
   gymRowText: { color: color.ink, fontSize: 16 },
   gymRowActive: { color: color.accentInk, fontWeight: "600" },
   sheetNote: { color: color.muted, fontSize: 13, lineHeight: 19, paddingTop: space.md },
+
+  recentRow: { minHeight: hit.min, paddingVertical: space.sm },
+  deleteWhat: { color: color.ink, fontSize: 15, fontWeight: "500" },
+  deleteWhen: { ...microLabel, ...tnum, marginTop: 2 },
+  deleteLifts: { color: color.muted, fontSize: 13, lineHeight: 19, marginTop: space.sm },
+  deleteWarn: { color: color.ink, fontSize: 14, lineHeight: 20, marginVertical: space.lg },
+  deleteError: { color: color.bad, fontSize: 13, lineHeight: 19, marginBottom: space.md },
+  secondary: { marginTop: space.sm },
 });
 
 /**
@@ -146,8 +159,39 @@ export function StartScreen({
   notice: string | null;
 }) {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const [picking, setPicking] = useState(false);
   const [adding, setAdding] = useState(false);
+  /** The past workout whose delete sheet is open. */
+  const [deleting, setDeleting] = useState<RecentWorkoutRow | null>(null);
+  const [deleteError, setDeleteError] = useState("");
+  const [deletePending, setDeletePending] = useState(false);
+
+  /*
+   * Deleting a past workout, and every set in it.
+   *
+   * A direct request rather than the outbox, the same call the session screen
+   * makes to remove a delivered set: it changes something already on the
+   * server, and the sheet can only honestly close once the server has done it.
+   * Offline, it fails in the sheet with the reason and nothing is lost.
+   */
+  const confirmDelete = async (row: RecentWorkoutRow) => {
+    setDeleteError("");
+    setDeletePending(true);
+    try {
+      await apiDelete(`/api/mobile/workout?id=${encodeURIComponent(row.id)}`);
+      tapSave();
+      setDeleting(null);
+      // Every card on this page, Today's charts and the lift-day grid read
+      // from bootstrap, and all of them just changed.
+      await queryClient.invalidateQueries({ queryKey: queryKeys.bootstrap });
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : "Could not delete that workout.");
+      tapError();
+    } finally {
+      setDeletePending(false);
+    }
+  };
 
   const gyms: GymDto[] = bootstrap?.gyms ?? [];
   const gym = gyms.find((g) => g.id === gymId) ?? gyms.find((g) => g.isDefault) ?? gyms[0];
@@ -155,6 +199,7 @@ export function StartScreen({
   const next = bootstrap !== undefined ? nextUpBlock(bootstrap) : null;
   const last = bootstrap !== undefined ? lastSessionBlock(bootstrap) : null;
   const mains = bootstrap !== undefined ? mainLiftRows(bootstrap) : [];
+  const recent = bootstrap !== undefined ? recentWorkoutRows(bootstrap) : [];
 
   return (
     <Screen
@@ -317,9 +362,85 @@ export function StartScreen({
                 ))
               )}
             </Card>
+
+            {/*
+              Every past workout, one row each — never one row per date, which
+              is how two sessions used to be drawn as one. Tapping a row is how
+              a workout is deleted: the owner asked for exactly this "just in
+              case there are errors", and a session logged twice, or against
+              the wrong day, had no way out before.
+            */}
+            {recent.length > 0 && (
+              <Card>
+                <Label>Recent workouts</Label>
+                {recent.map((row, i) => (
+                  <Pressable
+                    key={row.id}
+                    onPress={() => {
+                      tapSelect();
+                      setDeleteError("");
+                      setDeleting(row);
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${row.name}, ${row.when}, ${row.summary}`}
+                    accessibilityHint="Opens this workout so it can be deleted"
+                    style={({ pressed }) => [
+                      styles.recentRow, i > 0 && styles.divided, pressed && styles.pressed,
+                    ]}
+                  >
+                    <View style={styles.sessionHead}>
+                      <Text style={styles.sessionName} numberOfLines={1}>{row.name}</Text>
+                      <Text style={styles.sessionWhen}>{row.when}</Text>
+                    </View>
+                    <Text style={styles.liftDetail} numberOfLines={1}>{row.summary}</Text>
+                  </Pressable>
+                ))}
+              </Card>
+            )}
           </>
         )}
       </View>
+
+      {/*
+        The confirmation, and the reason it says a number: there is no undo,
+        and "delete this workout?" alone does not say whether that is one stray
+        set or an hour of training.
+      */}
+      <Sheet
+        visible={deleting !== null}
+        onClose={() => {
+          if (!deletePending) setDeleting(null);
+        }}
+        title="Delete this workout?"
+      >
+        {deleting !== null && (
+          <>
+            <Text style={styles.deleteWhat}>{deleting.name}</Text>
+            <Text style={styles.deleteWhen}>{deleting.when}</Text>
+            {deleting.lifts.length > 0 && (
+              <Text style={styles.deleteLifts}>{deleting.lifts.join(" · ")}</Text>
+            )}
+            <Text style={styles.deleteWarn}>{deleteWorkoutPrompt(deleting)}</Text>
+            {deleteError !== "" && <Text style={styles.deleteError}>{deleteError}</Text>}
+            <Button
+              variant="danger"
+              size="lg"
+              disabled={deletePending}
+              onPress={() => void confirmDelete(deleting)}
+            >
+              {deletePending ? "DELETING…" : "DELETE WORKOUT"}
+            </Button>
+            <Button
+              variant="ghost"
+              style={styles.secondary}
+              disabled={deletePending}
+              onPress={() => setDeleting(null)}
+            >
+              KEEP IT
+            </Button>
+          </>
+        )}
+      </Sheet>
 
       {/*
         A sheet, not a dropdown. There is no `<select>`-equivalent anywhere in
