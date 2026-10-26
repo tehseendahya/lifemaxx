@@ -219,8 +219,7 @@ export function StartScreen({
               </Pressable>
             ) : (
               <Text style={styles.noGyms}>
-                No gyms saved. The session will still log; add a gym on the web app so the coach knows
-                what equipment you have.
+                No gyms saved. The session logs the same without one.
               </Text>
             )}
 

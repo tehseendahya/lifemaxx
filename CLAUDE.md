@@ -4,7 +4,8 @@ Personal health tracker with an AI coach: lifting (live set logging), meals
 (photo to macros), runs (Strava / Health Auto Export), bodyweight and TDEE.
 Two people and many concurrent Claude sessions change this repo at once. Read
 this whole file before you edit anything. Client-specific notes are in
-`mobile/CLAUDE.md`.
+`mobile/CLAUDE.md`, and the mobile vs web split (with a diagram) is at the top
+of `README.md`.
 
 ## Repo map
 
