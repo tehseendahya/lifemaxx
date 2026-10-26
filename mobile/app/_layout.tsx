@@ -112,6 +112,8 @@ function Gate() {
       <Stack.Screen name="sign-in" options={{ animation: "fade" }} />
       <Stack.Screen name="runs" />
       <Stack.Screen name="exercise" />
+      {/* A past workout, every set editable. Pushed from Lift and from Exercise. */}
+      <Stack.Screen name="workout" />
       <Stack.Screen name="coach" options={{ presentation: "modal" }} />
       {/*
         There is no `exercise-picker` route. The scaffold reserved one as a

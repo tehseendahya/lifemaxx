@@ -3,8 +3,44 @@ import { preflight } from "@/lib/auth/cors";
 import { db } from "@/db";
 import { workouts } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
-import { getActiveWorkout } from "@/lib/queries";
+import { getActiveWorkout, getWorkoutSets } from "@/lib/queries";
+import { workoutDetail } from "@/lib/workout-edit";
 import { requireUuid } from "../shared";
+
+/**
+ * One past workout, every set — the phone's workout detail screen.
+ *
+ * Every set, warmups included, in logged order and in lb. The phone groups
+ * them by exercise; the server does not, because "first-performed order" is a
+ * presentation decision and the flat list is what the edit route speaks.
+ *
+ * `live` is sent rather than refused: the screen needs to say "this session is
+ * still running, open Lift" instead of a bare error, and it can only say that
+ * if it is told. The write routes are what refuse it.
+ */
+export const GET = route(async ({ userId, searchParams }) => {
+  const id = requireUuid(searchParams.get("id"), "id");
+
+  const [workout] = await db
+    .select({
+      id: workouts.id,
+      name: workouts.name,
+      nameIsCustom: workouts.nameIsCustom,
+      localDate: workouts.localDate,
+      startedAt: workouts.startedAt,
+      endedAt: workouts.endedAt,
+      status: workouts.status,
+    })
+    .from(workouts)
+    .where(and(eq(workouts.id, id), eq(workouts.userId, userId)))
+    .limit(1);
+
+  // Unknown and someone else's are the same answer, so neither leaks.
+  if (workout === undefined) throw new HttpError("Unknown workout.", 404);
+
+  const [rows, live] = await Promise.all([getWorkoutSets(id), getActiveWorkout(userId)]);
+  return workoutDetail(workout, rows, live?.id ?? null);
+});
 
 /**
  * Deleting a whole workout.
