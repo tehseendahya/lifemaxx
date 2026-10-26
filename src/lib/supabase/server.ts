@@ -14,7 +14,8 @@ export async function createClient() {
           try {
             list.forEach(({ name, value, options }) => store.set(name, value, options));
           } catch {
-            // Called from a Server Component — the middleware refreshes instead.
+            // Called from a Server Component, which cannot set cookies. Only the
+            // route handlers (/auth/callback) need to; nothing else does.
           }
         },
       },

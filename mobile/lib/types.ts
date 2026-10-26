@@ -197,6 +197,16 @@ export interface Bootstrap {
    */
   recentWorkouts?: RecentWorkoutDto[];
   /**
+   * Whether this account has Strava linked — the Settings row's "Connected" vs
+   * "Connect Strava". Linking is `POST /api/mobile/strava/connect` → `{ url }`
+   * (`StravaConnectResponse`), opened in a browser; Strava's callback then
+   * lands on `/you?strava=connected` or `/you?strava=error`.
+   *
+   * Optional because a server or cached bootstrap from before the field
+   * existed sends nothing; treat absent as "unknown", not as "not connected".
+   */
+  stravaConnected?: boolean;
+  /**
    * Carry-forward cues, keyed by exercise id.
    *
    * "Elbows tucked, pause on chest" on the bench press, written once and shown
@@ -470,4 +480,27 @@ export interface CueResponse {
   exerciseId: string;
   /** Null when the cue was cleared. */
   cue: string | null;
+}
+
+// ------------------------------------------- POST /api/mobile/strava/connect
+
+/**
+ * Bearer-authenticated, no body. `url` is Strava's authorize page with a
+ * signed, ten-minute `state` naming this user; open it in a browser (it works
+ * in Safari with no session, which is the point). 503 with `{ error }` when
+ * the server has no Strava app or no signing secret configured.
+ */
+export interface StravaConnectResponse {
+  url: string;
+}
+
+// -------------------------------------------------- POST /api/push/subscribe
+
+/**
+ * Web only. The body is `PushSubscription.toJSON()` as the browser returns it,
+ * subscribed with `EXPO_PUBLIC_VAPID_PUBLIC_KEY`; the response is `{ ok: true }`.
+ */
+export interface PushSubscriptionBody {
+  endpoint: string;
+  keys: { p256dh: string; auth: string };
 }

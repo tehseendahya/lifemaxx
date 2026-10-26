@@ -1,5 +1,7 @@
+import { Platform } from "react-native";
 import Constants from "expo-constants";
 import { rawStore } from "./secure-store";
+import { resolveApiBase, webOriginFor } from "./api-base";
 
 /**
  * Where the API lives.
@@ -12,6 +14,10 @@ import { rawStore } from "./secure-store";
  *   1. a runtime override the user types in the You screen (SecureStore)
  *   2. `EXPO_PUBLIC_API_BASE_URL`, inlined at bundle time
  *   3. `expo.extra.apiBaseUrl` in app.json
+ *   4. web only: the origin the page was served from. The deployed web client
+ *      is served by the same Next app as the API, so this is right on
+ *      production and every preview with nothing configured — see
+ *      `./api-base`, where the rule lives and is tested.
  *
  * Plain HTTP to a LAN address works in Expo Go without an ATS exemption,
  * because Expo Go's own entitlements permit it. `newClientId()` in the shared
@@ -42,13 +48,27 @@ const bundled = trim(
     (typeof extra().apiBaseUrl === "string" ? (extra().apiBaseUrl as string) : ""),
 );
 
-export function apiBaseUrl(): string {
-  return override ?? bundled;
+/**
+ * Read per call rather than captured at load: it is cheap, and `window` does
+ * not exist during Expo's static rendering pass. `globalThis.location` rather
+ * than `window.location` so native, which has no `window.location`, reads
+ * undefined instead of throwing — and `webOriginFor` ignores it there anyway.
+ */
+function webOrigin(): string | null {
+  return webOriginFor(Platform.OS, (globalThis as { location?: { origin?: string } }).location);
 }
 
-/** The compiled-in default, so the You screen can offer "reset to default". */
+export function apiBaseUrl(): string {
+  return resolveApiBase({ override, bundled, webOrigin: webOrigin() });
+}
+
+/**
+ * The default with no override, so the You screen can offer "reset to
+ * default". On the web that includes the page origin, because that is what
+ * resetting actually goes back to.
+ */
 export function defaultApiBaseUrl(): string {
-  return bundled;
+  return resolveApiBase({ override: null, bundled, webOrigin: webOrigin() });
 }
 
 /** True when neither app.json nor the env var was filled in — the UI should say so rather than fail opaquely. */

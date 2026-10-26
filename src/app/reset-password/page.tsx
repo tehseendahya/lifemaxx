@@ -38,12 +38,17 @@ export default function ResetPassword() {
       setError(error.message);
       return;
     }
-    // Full load so the server components render with the refreshed session.
-    window.location.assign("/");
+    // The cookie session /auth/callback minted exists only to authorise this
+    // one `updateUser`. The app proper is the Expo client, which keeps its own
+    // session in localStorage and never reads this cookie — so drop it (local
+    // scope: a global sign-out would also end the phone's session) and send the
+    // user to sign in with the password they just chose.
+    await supabase().auth.signOut({ scope: "local" });
+    window.location.assign("/sign-in");
   }
 
   return (
-    <div className="mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center">
+    <div className="mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center px-4">
       <h1 className="text-3xl font-semibold tracking-tight">Choose a password</h1>
 
       {ready === "checking" && <p className="mt-4 text-sm text-muted">Checking your link…</p>}
@@ -54,7 +59,7 @@ export default function ResetPassword() {
             This reset link is no longer valid. Links expire, and can only be used
             once.
           </p>
-          <a href="/login" className="mt-3 inline-block text-sm text-accent">
+          <a href="/sign-in" className="mt-3 inline-block text-sm text-accent">
             Request a new one →
           </a>
         </div>
@@ -63,7 +68,7 @@ export default function ResetPassword() {
       {ready === "ok" && (
         <>
           <p className="mt-2 text-sm text-muted">
-            At least 6 characters. You will be signed in straight afterwards.
+            At least 6 characters. You sign in with it straight afterwards.
           </p>
           <form onSubmit={submit} className="mt-6 space-y-3">
             <input

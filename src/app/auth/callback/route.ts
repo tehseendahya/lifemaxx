@@ -20,11 +20,11 @@ export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get("code");
   const next = safeNext(searchParams.get("next"));
-  if (!code) return NextResponse.redirect(`${origin}/login`);
+  if (!code) return NextResponse.redirect(`${origin}/sign-in`);
 
   const supabase = await createClient();
   const { data, error } = await supabase.auth.exchangeCodeForSession(code);
-  if (error || !data.user) return NextResponse.redirect(`${origin}/login`);
+  if (error || !data.user) return NextResponse.redirect(`${origin}/sign-in`);
 
   // First sign-in creates the profile row the rest of the app hangs off.
   await ensureProfile(data.user.id, data.user.email ?? "");

@@ -1,32 +1,32 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { timingSafeEqual } from "node:crypto";
-import { currentUserId } from "@/lib/supabase/server";
-import { exchangeCode, syncActivities, STRAVA_STATE_COOKIE } from "@/lib/strava";
+import { exchangeCode, syncActivities } from "@/lib/strava";
+import { stravaStateSecret, verifyStravaState } from "@/lib/strava-state";
 import { db, withUser } from "@/db";
 import { stravaAccounts } from "@/db/schema";
 import { getProfile } from "@/lib/queries";
 
-function statesMatch(a: string | undefined, b: string | null): boolean {
-  if (!a || !b || a.length !== b.length) return false;
-  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
-}
-
+/**
+ * Where Strava sends the user back after they approve (or decline).
+ *
+ * The user id comes from the signed `state` that `POST /api/mobile/strava/
+ * connect` minted, and from nowhere else. There is deliberately no cookie or
+ * session lookup: this request usually arrives in Safari on the phone, which
+ * has neither, and a cookie that happened to be present would be a second
+ * opinion about who the user is that could disagree with the first.
+ *
+ * Either way it ends on the client's You screen, which reads `?strava=` to say
+ * what happened.
+ */
 export async function GET(req: Request) {
   const url = new URL(req.url);
+  const done = (outcome: "connected" | "error") =>
+    NextResponse.redirect(new URL(`/you?strava=${outcome}`, req.url));
+
   const code = url.searchParams.get("code");
-  const state = url.searchParams.get("state");
-
-  const userId = await currentUserId();
-  const expected = (await cookies()).get(STRAVA_STATE_COOKIE)?.value;
-
-  const fail = () => {
-    const response = NextResponse.redirect(new URL("/settings?strava=failed", req.url));
-    response.cookies.delete(STRAVA_STATE_COOKIE);
-    return response;
-  };
-
-  if (!userId || !code || !statesMatch(expected, state)) return fail();
+  // `error=access_denied` (the user pressed Cancel) arrives with no code and
+  // lands here too.
+  const userId = verifyStravaState(url.searchParams.get("state"), stravaStateSecret());
+  if (!userId || !code) return done("error");
 
   try {
     const token = await exchangeCode(code);
@@ -50,10 +50,8 @@ export async function GET(req: Request) {
     await syncActivities(userId, profile?.tz ?? "America/New_York");
   } catch (err) {
     console.error("[strava/callback]", err);
-    return fail();
+    return done("error");
   }
 
-  const response = NextResponse.redirect(new URL("/settings?strava=connected", req.url));
-  response.cookies.delete(STRAVA_STATE_COOKIE);
-  return response;
+  return done("connected");
 }
