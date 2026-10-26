@@ -1,10 +1,18 @@
-# lifemaxx — native iOS client
+# lifemaxx: the client (phone and laptop)
 
-The phone client. The Next.js app in the parent directory is unchanged: it
-stays the backend for this app and the UI on a laptop. This is not a
-replacement for it and does not aim at feature parity with it.
+This is **the only UI** lifemaxx has. The same Expo app runs on the iPhone in
+**Expo Go** and on the laptop as **Expo web**. The production build exports it
+into the root `public/`, and Vercel serves it from the same URL as the API.
+The Next.js app in the parent directory is the backend only: `/api/*`, plus
+`/auth/callback` and `/reset-password`. Its old pages are gone. A feature
+belongs here, once, for both platforms, with a `Platform.OS === "web"` branch
+only where a capability really differs (camera vs file upload, voice, number
+pad vs text inputs). See [`CLAUDE.md`](CLAUDE.md) for the rules and the
+phone/web table.
 
-Built to run in **Expo Go**, which shapes nearly every decision below.
+Built to run in **Expo Go**, which shapes nearly every decision below. Parts
+of this file predate the laptop web. Where it says "the web app", it means the
+retired Next.js pages.
 
 ---
 
@@ -96,8 +104,8 @@ a cold-start deep link, and the web app already has password auth.
   has email confirmation switched on, you get "Check your email to confirm the
   account, then sign in"; confirm in the browser, come back, sign in. The
   `profiles` row is created on that first real sign-in.
-- **Forgotten password** — reset it in the browser app. It needs an emailed
-  link, which only works on the web.
+- **Forgotten password** — the emailed link opens `/reset-password`, one of
+  the two pages the backend still serves, in the browser.
 
 If sign-in fails, read the **CONNECTION** card at the bottom of the same
 screen. A wrong API base URL and a wrong password look identical from the
@@ -212,11 +220,6 @@ it by appending `/shared-smoke` to the URL in Expo Go's developer menu, or from
 
 ### Stubbed, degraded or deliberately missing
 
-- **Setting a calorie target.** No `POST /api/targets` route exists in the API —
-  the web app writes that row directly from a server component. The You screen
-  shows the cut / maintain / lean-bulk chips with the kcal and lb-per-week each
-  implies, and then says to set it on the laptop. It is the one place the
-  native app sends you elsewhere.
 - **The mic with no `OPENAI_TRANSCRIBE_MODEL`.** `/api/voice/transcribe`
   answers 503 and the button reads "Speaking isn't set up yet — type it
   instead". Typed entry is unaffected. Set the variable in the API's
@@ -296,7 +299,7 @@ hoisted `semver` is version 6 and has no `functions/satisfies` subpath. With it
 on, `expo export` fails outright. The comment in `metro.config.js` says this
 too, because the obvious fix here is the wrong one.
 
-### Sharing code with the web app
+### Sharing code with the backend
 
 The domain layer (`src/lib/domain/*` — units, e1RM, progression, muscles, TDEE,
 readiness, running) and the outbox queue (`src/lib/outbox/queue.ts`) are pure
@@ -359,6 +362,7 @@ features/     one folder per screen. Each keeps its decisions in a pure
               makes them unit-testable with no simulator.
 lib/          api client, auth, config, outbox adapter, haptics, query client.
 lib/shared/   one-line barrels re-exporting ../../../src/lib/domain/*.
+public/       static web assets (manifest, icons, sw.js) copied into the web export.
 ```
 
 ---
@@ -534,13 +538,23 @@ new version; fully close and reopen the app to pick it up.
 
 ### Doing it
 
+**This is automatic now.** Every push to `main` that touches `mobile/**` or
+`src/lib/**` runs `.github/workflows/eas-update.yml`. That workflow typechecks
+and tests the client, then publishes exactly the command below, using the
+`EXPO_TOKEN` repository secret. If the secret is missing, the workflow skips
+with a notice. It can also be run by hand from the Actions tab. To publish
+manually from a laptop:
+
 ```bash
 cd mobile
 npx eas-cli@latest login      # once
 npx eas-cli@latest init       # once; already done for @tehseendahya/lifemaxx
-npm run publish               # every time you want changes on the phone
+npm run publish               # publish the current checkout to the phone
 # config comes from `eas env:list --environment production`, not from .env
 ```
+
+Publish from an up-to-date `main` only. A publish from a feature branch puts
+unmerged code on everyone's phone until the next merge overwrites it.
 
 `npm run publish` is
 `npx eas-cli@latest update --branch main --environment production --non-interactive --message "<last commit subject>"`.
@@ -553,9 +567,10 @@ committed, since this repository has one owner.
 
 ### Answering the second half of the question
 
-**Changes do not appear by themselves.** `eas update` publishes a snapshot.
-Editing a file on your machine does nothing to the published bundle; you run
-`eas update` again and reopen it. It is a publish step, not live reload — the
+**Local edits don't appear by themselves.** `eas update` publishes a
+snapshot. A merge to `main` republishes it through the workflow above, but
+editing a file on your machine does nothing to the published bundle until that
+change merges (or you run `eas update`). Then reopen the app. It is a publish step, not live reload — the
 dev server's fast refresh is the only thing that updates as you type, and that
 needs the laptop.
 
@@ -566,7 +581,9 @@ gym.
 
 - Since 12 May 2026, Expo Go only loads EAS Update projects you own or that
   belong to an organisation you are in. Signing in to Expo Go with the same
-  account you ran `eas login` with is therefore not optional.
+  account you ran `eas login` with is therefore not optional. A collaborator
+  can only open the published link once the project belongs to an Expo
+  organisation they're a member of. Until then, they use `npx expo start`.
 - There is an open report of EAS Updates failing to load in Expo Go **on
   Android** for SDK 57, with iOS unaffected. This project targets iOS and is on
   SDK 58, so it probably does not apply — but it has not been confirmed from

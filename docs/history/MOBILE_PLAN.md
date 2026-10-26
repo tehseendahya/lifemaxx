@@ -1,8 +1,16 @@
+> **Historical. Do not implement from this document.** The client described
+> here was built on 2026-10-25, and on 2026-10-26 it became the **only UI**,
+> for both the phone and the laptop web, with the Next.js app reduced to the
+> backend. For the current architecture and rules, see
+> [`CLAUDE.md`](../../CLAUDE.md) and [`mobile/README.md`](../../mobile/README.md).
+> This plan is kept for its reasoning: the Expo Go constraint, the dependency
+> allowlist, the shared-code strategy and the first-use fix round.
+
 # lifemaxx — native client plan
 
-**Status:** approved in principle, not yet built. No code exists for this yet.
+**Status (at the time):** approved in principle, not yet built.
 
-Produced by the planning agent on 2026-10-25, ahead of implementation. Sibling of [`SPEC.md`](./SPEC.md), which remains the product spec — this covers only the native client and the backend work it requires.
+Produced by the planning agent on 2026-10-25, ahead of implementation. Sibling of [`SPEC.md`](../SPEC.md), which remains the product spec — this covers only the native client and the backend work it requires.
 
 The distribution story is **Expo Go**: `npx expo start`, scan the QR with the Expo Go app. No Apple Developer account, no TestFlight, no EAS build, no native code. That single constraint drives most of what follows.
 
