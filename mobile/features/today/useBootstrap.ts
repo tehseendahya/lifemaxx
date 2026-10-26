@@ -2,9 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useFocusEffect } from "expo-router";
 
-import { apiGet } from "@/lib/api";
+import { apiGet, apiPost } from "@/lib/api";
 import { useOutbox } from "@/lib/outbox";
 import { queryKeys } from "@/lib/query";
+import { deviceTimezone, timezoneToReport } from "@/lib/timezone";
 import type { Bootstrap } from "@/lib/types";
 
 /**
@@ -92,6 +93,48 @@ export function useBootstrap(): BootstrapView {
     previousPending.current = pending;
     if (drained) void client.invalidateQueries({ queryKey: queryKeys.bootstrap });
   }, [pending, client]);
+
+  /*
+   * Tell the server where the phone is, the first time it disagrees.
+   *
+   * `profiles.tz` decides what `localDate()` calls today, and nothing had ever
+   * written to it — every account sat on the `America/New_York` schema default,
+   * so every date in the app was a New York date. This is the one place that
+   * can fix it without asking the owner anything: bootstrap already reports
+   * what the server holds, and the phone already knows the truth.
+   *
+   * It hangs off bootstrap rather than off sign-in because it has to re-run
+   * after travel, and bootstrap is the call that happens on every launch and
+   * every focus.
+   *
+   * `reported` is the loop guard, and it is load-bearing. The success path
+   * terminates on its own — the write makes the two agree, so the next payload
+   * reports nothing to do — but the FAILURE path does not: a zone the server
+   * refuses as unusable leaves the column unchanged, so the next bootstrap
+   * would disagree again and post again, forever. One attempt per zone per
+   * launch, whatever the outcome.
+   */
+  const serverTz = query.data?.tz;
+  const reported = useRef<string | null>(null);
+  useEffect(() => {
+    const tz = timezoneToReport(deviceTimezone(), serverTz);
+    if (tz === null || reported.current === tz) return;
+
+    reported.current = tz;
+    void apiPost("/api/profile", { tz })
+      .then(() => {
+        // `today` is computed server-side from this, so everything derived
+        // from it is now wrong in the cache — including which day the
+        // dashboard thinks it is showing.
+        void client.invalidateQueries({ queryKey: queryKeys.bootstrap });
+      })
+      .catch((err: unknown) => {
+        // Not surfaced. The dates stay as they were, which is the state the
+        // app has been in all along, and nothing the owner can do about it
+        // belongs in front of them mid-session.
+        console.warn("[today] could not report the timezone", err);
+      });
+  }, [serverTz, client]);
 
   return {
     data: query.data,

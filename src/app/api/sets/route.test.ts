@@ -53,6 +53,15 @@ vi.mock("@/lib/queries", () => ({
     id: "workout-1",
     startedAt: new Date("2026-10-25T18:00:00Z"),
   }),
+  // The route resolves a set against the session it was LOGGED in rather than
+  // whatever is active on arrival, so this is the lookup it actually calls.
+  // Leaving it out of the mock does not fail loudly — vitest answers the call
+  // with a 500, which the old `not.toBe(400)` assertions below happily
+  // accepted. They assert `toBe(200)` now.
+  workoutForSetAt: async () => ({
+    id: "workout-1",
+    startedAt: new Date("2026-10-25T18:00:00Z"),
+  }),
 }));
 
 const { POST } = await import("./route");
@@ -108,7 +117,11 @@ describe("the sanity bound", () => {
     ];
     for (const [label, body] of cases) {
       const res = await POST(post(body));
-      expect(res.status, label).not.toBe(400);
+      // `toBe(200)`, not `not.toBe(400)`. The weaker form passed on a 500 for
+      // a whole round of this file's life: the route gained a dependency the
+      // mock did not provide, every one of these crashed, and "not 400" is
+      // true of a crash.
+      expect(res.status, label).toBe(200);
     }
   });
 

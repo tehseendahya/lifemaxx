@@ -4,12 +4,13 @@ import {
   bodyMetrics, targets, profiles, activities, gyms, weeklyRunningSummaries,
   type Muscle, MUSCLES,
 } from "@/db/schema";
-import { and, desc, eq, gte, sql, inArray } from "drizzle-orm";
+import { and, desc, eq, gte, lte, sql, inArray } from "drizzle-orm";
 import { hardSetsByMuscle, type CountedSet } from "./domain/muscles";
 import { rankMuscles, type MuscleState } from "./domain/readiness";
 import { estimateTdee, proteinTargetG, WINDOW_DAYS, type WeighIn } from "./domain/tdee";
 import { isRun, LOWER_BODY, weekStartOf, type Run } from "./domain/running";
 import { bestE1rm } from "./domain/e1rm";
+import { sessionEndedBy, type SessionActivity } from "./domain/session";
 
 /** Local date string for a user's timezone — the app's unit of "a day". */
 export function localDate(tz: string, at: Date = new Date()): string {
@@ -84,11 +85,106 @@ export async function getDailyIntake(userId: string, sinceDate: string) {
 
 // ------------------------------------------------------------------ training
 
-export async function getActiveWorkout(userId: string) {
+/**
+ * The session that is live — not merely the one left in `status = 'active'`.
+ *
+ * Those used to be the same thing, and that was the bug. Nothing ended a
+ * session except a tap on STOP, so a workout walked away from stayed open
+ * forever and the next day's sets were written into it, under the previous
+ * day's `localDate`. `sessionEndedBy` is the rule; see `domain/session.ts`.
+ *
+ * ── `at` IS NOT `Date.now()`, AND THAT IS THE POINT ────────────────────────
+ *
+ * A set logged in a basement reaches the server whenever the phone next has
+ * signal, which can be hours later. It belongs to the session that was alive
+ * when it was LOGGED, so `POST /api/sets` passes the set's own `loggedAt` and
+ * a morning session uploaded at six in the evening still lands in the morning.
+ * Defaulting this to now would have turned every delayed delivery into "Start
+ * a session first", which is a worse bug than the one being fixed.
+ *
+ * This does NOT write: a stale session is filtered out, not closed. Closing it
+ * is `closeStaleSession` below, called from the paths that are already writing.
+ * A read that quietly mutates is a read nobody can reason about.
+ */
+export async function getActiveWorkout(userId: string, at: Date = new Date()) {
   const [row] = await db.select().from(workouts)
     .where(and(eq(workouts.userId, userId), eq(workouts.status, "active")))
     .orderBy(desc(workouts.startedAt)).limit(1);
-  return row ?? null;
+
+  if (!row) return null;
+  return sessionEndedBy(await activityOf(row), at) ? null : row;
+}
+
+/**
+ * The workout a set belongs to, chosen by WHEN IT WAS LOGGED.
+ *
+ * `getActiveWorkout` answers "is a session running right now", which is the
+ * question the Lift screen asks. This answers a different one, and `POST
+ * /api/sets` needs this one: *which session was I in at 7:05 this morning?*
+ *
+ * They came apart the moment sessions were given a lifetime. Consider the case
+ * this exists for, which is the ordinary one in a basement gym:
+ *
+ *   07:00  start, log four sets, no signal — all four sit in the outbox
+ *   07:40  last set; phone goes in a pocket, app suspends
+ *   18:00  app reopened. The 7am session is long idle, so tapping START LIFT
+ *          closes it and opens a new one — and only THEN does the outbox get
+ *          its flush
+ *
+ * Asked "is a session active", those four sets get a 400, are classified
+ * permanent, and are dropped. The morning is gone. Asked "which session was
+ * live at 07:05", they land where they were always meant to, in a workout that
+ * now happens to be closed. Closed is not the same as wrong.
+ *
+ * So status is deliberately not part of the predicate: a workout is the right
+ * home for a set if the set was logged after it started and before it went
+ * idle. `abandoned` is the one exclusion — that status means "this was a
+ * mistake, bin it", and a set arriving for one is better off re-homed than
+ * resurrecting a session the user discarded.
+ */
+export async function workoutForSetAt(userId: string, at: Date) {
+  const rows = await db.select().from(workouts)
+    .where(and(
+      eq(workouts.userId, userId),
+      inArray(workouts.status, ["active", "completed"]),
+      // `lte`, not a `sql` template: a raw Date interpolated into one reaches
+      // the driver as a Date and is rejected outright ("must be of type
+      // string"). The typed operator knows the column is a timestamptz and
+      // serialises it.
+      lte(workouts.startedAt, at),
+    ))
+    .orderBy(desc(workouts.startedAt)).limit(1);
+
+  const row = rows[0];
+  if (!row) return null;
+
+  // The same idle rule, read from the other side: the set is in range if the
+  // session had not yet ended by the time it was logged.
+  return sessionEndedBy(await activityOf(row), at) ? null : row;
+}
+
+/**
+ * When a workout was last alive — its last set, or its start if it has none.
+ *
+ * The timestamp is coerced rather than trusted: `max()` over a `timestamptz`
+ * comes back as a `Date` from this driver, but an aggregate's type is the one
+ * place drizzle cannot check that claim, and a string here would make every
+ * arithmetic comparison in `sessionEndedBy` silently `NaN` — which compares
+ * false, so every session would read as live and the original bug would be
+ * back with tests still green.
+ */
+export async function activityOf(
+  workout: { id: string; startedAt: Date },
+): Promise<SessionActivity> {
+  const [row] = await db.select({ lastSetAt: sql<Date | string | null>`max(${sets.loggedAt})` })
+    .from(sets).where(eq(sets.workoutId, workout.id));
+
+  const raw = row?.lastSetAt ?? null;
+  const lastSetAt = raw === null ? null : new Date(raw);
+  return {
+    startedAt: workout.startedAt,
+    lastSetAt: lastSetAt !== null && !Number.isNaN(lastSetAt.getTime()) ? lastSetAt : null,
+  };
 }
 
 export async function getWorkoutSets(workoutId: string) {
