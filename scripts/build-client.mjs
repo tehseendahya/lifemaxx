@@ -173,6 +173,7 @@ function exportWeb() {
     if (!existsSync(join(outDir, "index.html"))) {
       throw new Error("expo export produced no index.html — refusing to replace public/.");
     }
+    assertBundleRuns(readFileSync(join(outDir, "index.html"), "utf8"));
 
     rmSync(publicDir, { recursive: true, force: true });
     cpSync(outDir, publicDir, {
@@ -183,6 +184,28 @@ function exportWeb() {
     log("public/ now holds the web client.");
   } finally {
     rmSync(outDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Expo injects the bundle's script tags before the FIRST closing body tag in
+ * mobile/public/index.html — including one written inside an HTML comment.
+ * That shipped once: every script landed inside a comment and the site was a
+ * blank page that still returned 200 with the right markup. Fail the build
+ * instead.
+ */
+function scriptsOutsideComments(html) {
+  const scripts = [...html.matchAll(/<script\b[^>]*\bsrc=/g)];
+  if (scripts.length === 0) return false;
+  const stripped = html.replace(/<!--[\s\S]*?-->/g, "");
+  return [...stripped.matchAll(/<script\b[^>]*\bsrc=/g)].length === scripts.length;
+}
+
+function assertBundleRuns(html) {
+  if (!scriptsOutsideComments(html)) {
+    throw new Error(
+      "The exported index.html has no live <script src> tags (are they inside an HTML comment in mobile/public/index.html?). Refusing to ship a blank page.",
+    );
   }
 }
 

@@ -6,7 +6,7 @@
       non-API path (see scripts/build-client.mjs and the fallback rewrite in
       next.config.ts). `expo export --platform web` with `output: "single"`
       uses this file as its template when it exists, injecting the bundle
-      <script> tags before </body>; it is Expo's default template plus the
+      script tags before the closing body tag (never write that tag literally in a comment here: Expo injects before its FIRST occurrence, which once put the whole bundle inside this comment and served a blank page); it is Expo's default template plus the
       PWA tags the old Next layout used to emit, so a phone that added the
       site to its home screen keeps its icon, name and dark status bar.
     -->
