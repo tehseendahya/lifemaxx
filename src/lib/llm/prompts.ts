@@ -223,11 +223,20 @@ export function mealMessages(
   if (imageDataUrl) {
     parts.push({ type: "image_url", image_url: { url: imageDataUrl, detail: MEAL_IMAGE_DETAIL } });
   }
+  /*
+   * The phone composes a photo and a caption together and sends them in one
+   * call, so the caption is often MORE than a correction to the picture: "plus
+   * a protein shake" names something that is not on the plate at all. Without
+   * saying so, the model treats the image as the inventory and drops the shake.
+   */
+  const caption = note?.trim();
   parts.push({
     type: "text",
-    text: note?.trim()
-      ? `The person's note about this meal: "${note.trim()}"\n\nTrust the note over the image where they disagree.`
-      : "No note provided. Estimate from the image alone and set confidence accordingly.",
+    text: caption && imageDataUrl
+      ? `The person's caption for this meal: "${caption}"\n\nIt may name foods or drinks not visible in the photo. Include them as items. Use stated quantities and brands exactly. Trust the caption over the image where they disagree.`
+      : caption
+        ? `The person's note about this meal: "${caption}"\n\nTrust the note over the image where they disagree.`
+        : "No note provided. Estimate from the image alone and set confidence accordingly.",
   });
   messages.push({ role: "user", content: parts });
 

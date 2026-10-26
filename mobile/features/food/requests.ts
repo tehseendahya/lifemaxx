@@ -1,14 +1,16 @@
 import { ApiError, apiDelete, apiGet, apiPost } from "@/lib/api";
 import type { FoodDay } from "@/lib/types";
 
-import type { AnalyzedItem, AnalyzeResponse, MealSlot, MealSource } from "./model";
+import type { AnalyzeResponse } from "./model";
+import type { SaveMealInput, UpdateMealInput, UpdateMealResponse } from "./types";
 
 /**
- * The four server contracts this feature talks to, in one place.
+ * The server contracts this feature talks to, in one place.
  *
- * None of them are new and none of them change: the web client posts the same
- * bodies to the same routes, and `POST /api/meals/analyze` and `POST /api/meals`
- * are shared with `src/components/MealCapture.tsx`. The only reason this file
+ * The first four are shared with the web client, which posts the same bodies to
+ * the same routes: `POST /api/meals/analyze` and `POST /api/meals` are also
+ * what `src/components/MealCapture.tsx` uses. `POST /api/mobile/meal` (the
+ * meal editor's save) is the phone's own. The only reason this file
  * exists is so that the components below never build a URL or decide what a
  * failure means.
  */
@@ -42,19 +44,23 @@ export function analyzeMeal(input: { imageDataUrl?: string; note?: string }): Pr
   return apiPost<AnalyzeResponse>("/api/meals/analyze", input, ANALYZE_TIMEOUT_MS);
 }
 
-export interface SaveMealInput {
-  slot: MealSlot;
-  note: string;
-  source: MealSource;
-  confidence: number | null;
-  /** Omitted for today, so the server's notion of the date wins. */
-  localDate?: string;
-  /** snake_case macros — the model's schema, which is also what the route reads. */
-  items: AnalyzedItem[];
-}
+export type { SaveMealInput } from "./types";
 
+/** Build the body with `savePayload` (compose.ts) so no image can ride along. */
 export function saveMeal(input: SaveMealInput): Promise<{ meal: { id: string } }> {
   return apiPost<{ meal: { id: string } }>("/api/meals", input);
+}
+
+/**
+ * Save an edited meal: its items are replaced wholesale and its totals
+ * recomputed server-side. Build the body with `updatePayload` (model.ts).
+ *
+ * A direct call, not the outbox. The outbox is the live session's pipe, and an
+ * edit to a meal is something the user is watching happen in a sheet — if it
+ * fails, the sheet stays open with the error and the edits intact.
+ */
+export function updateMeal(input: UpdateMealInput): Promise<UpdateMealResponse> {
+  return apiPost<UpdateMealResponse>("/api/mobile/meal", input);
 }
 
 export function deleteMeal(id: string): Promise<{ ok: boolean }> {
@@ -78,3 +84,4 @@ export function describeFailure(err: unknown, offline: string): string {
 
 export const OFFLINE_ANALYSIS = "No signal. Meal analysis needs the server; the note is kept.";
 export const OFFLINE_SAVE = "No signal. The meal is still here — try again when you have one.";
+export const OFFLINE_EDIT = "No signal. Your changes are still here — try again when you have one.";
