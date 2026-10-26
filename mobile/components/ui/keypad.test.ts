@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { applyFirstKey, applyKey, BACKSPACE, displayValue, MAX_LENGTH, padKeys } from "./keypad";
+import {
+  applyFirstKey, applyKey, BACKSPACE, displayValue, MAX_LENGTH, padKeys, typedValue,
+} from "./keypad";
 
 /** Press a whole string of keys in order, the way a thumb would. */
 function type(keys: string, allowDecimal = true, from = ""): string {
@@ -156,5 +158,33 @@ describe("typing over a prefilled value", () => {
         if (next !== "") expect(Number.isNaN(Number(next)), `${prefill} + ${key}`).toBe(false);
       }
     }
+  });
+});
+
+describe("typedValue (the laptop's typed readout)", () => {
+  it("keeps what the pad would have produced", () => {
+    expect(typedValue("185", true)).toBe("185");
+    expect(typedValue("227.5", true)).toBe("227.5");
+    expect(typedValue("12", false)).toBe("12");
+  });
+
+  it("drops what a key press could not have typed", () => {
+    expect(typedValue("185 lb", true)).toBe("185");
+    expect(typedValue("abc", true)).toBe("");
+    expect(typedValue("1,5", false)).toBe("15");
+  });
+
+  it("refuses a point on an integer field, and a second point on a decimal one", () => {
+    expect(typedValue("8.5", false)).toBe("85");
+    expect(typedValue("1.2.3", true)).toBe("1.23");
+  });
+
+  it("reads a leading point as nought point, and collapses leading zeros", () => {
+    expect(typedValue(".5", true)).toBe("0.5");
+    expect(typedValue("007", true)).toBe("7");
+  });
+
+  it("stops at the pad's length limit", () => {
+    expect(typedValue("12345678", true)).toHaveLength(MAX_LENGTH);
   });
 });

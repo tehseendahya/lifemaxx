@@ -2,7 +2,9 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { SHEET_MIN_HEIGHT, SHEET_TOP_GAP, sheetMaxHeight } from "./sheet-size";
+import {
+  DIALOG_MARGIN, SHEET_MIN_HEIGHT, SHEET_TOP_GAP, dialogMaxHeight, sheetMaxHeight,
+} from "./sheet-size";
 
 /**
  * The guard on the safe-area bug: a sheet's title must never be able to render
@@ -71,5 +73,19 @@ describe("sheetMaxHeight", () => {
     const match = /xxl:\s*(\d+)/.exec(tokens);
     expect(match).not.toBeNull();
     expect(Number(match?.[1])).toBe(SHEET_TOP_GAP);
+  });
+});
+
+describe("dialogMaxHeight (the laptop's centred dialog)", () => {
+  it("leaves a margin above and below", () => {
+    for (const windowHeight of [600, 720, 900, 1080, 1440]) {
+      expect(windowHeight - dialogMaxHeight(windowHeight)).toBeGreaterThanOrEqual(2 * DIALOG_MARGIN);
+    }
+  });
+
+  it("never clamps to nothing, and caps nothing before the window is measured", () => {
+    expect(dialogMaxHeight(100)).toBe(SHEET_MIN_HEIGHT);
+    expect(dialogMaxHeight(0)).toBeGreaterThan(5000);
+    expect(dialogMaxHeight(Number.NaN)).toBeGreaterThan(5000);
   });
 });

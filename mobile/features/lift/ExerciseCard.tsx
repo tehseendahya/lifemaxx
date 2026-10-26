@@ -1,10 +1,11 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { Button, Card, Label, Segmented, Toggle, color, hit, radius, space, tnum } from "@/components/ui";
 import type { Segment } from "@/components/ui";
 import { microLabel } from "@/components/ui/Label";
 import { tapSelect } from "@/lib/haptics";
+import { useIsWide } from "@/lib/layout";
 import { KIND_LABEL, SET_KINDS, kindFlags, setKindOf, type SetKind } from "@/lib/set-kind";
 import { lbToKg, platesPerSide } from "@/lib/shared/units";
 import type { LastSet } from "@/lib/types";
@@ -17,6 +18,7 @@ import {
   type PagerExercise,
   type SuggestPair,
 } from "./logic";
+import { parseTypedReps, parseTypedWeight } from "./typed-entry";
 
 /** The RPE values that mean anything in practice. Below 6 is a warmup. */
 const RPE_SCALE = [6, 7, 8, 9, 10] as const;
@@ -84,6 +86,18 @@ const styles = StyleSheet.create({
   stepValueText: { ...tnum, color: color.ink, fontSize: 18, fontWeight: "600" },
   stepValueUnit: { color: color.muted, fontSize: 12, fontWeight: "400" },
   stepValuePlaceholder: { color: color.muted },
+  /** The laptop's typed figure: the same face as the button it replaces. */
+  stepInput: {
+    ...tnum,
+    color: color.ink,
+    fontSize: 18,
+    fontWeight: "600",
+    textAlign: "center",
+    width: "100%",
+    height: hit.big,
+    padding: 0,
+  },
+  stepInputRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: space.xs },
   pressed: { opacity: 0.6, backgroundColor: color.surface },
 
   plates: { ...microLabel, ...tnum, marginTop: space.sm },
@@ -125,6 +139,8 @@ export function ExerciseCard({
   onRequestSuggest,
   onStepWeight,
   onStepReps,
+  onTypeWeight,
+  onTypeReps,
   onToggleRpe,
   rpeOpen,
   noteOpen,
@@ -144,6 +160,10 @@ export function ExerciseCard({
   onRequestSuggest: (exerciseId: string) => void;
   onStepWeight: (dir: 1 | -1) => void;
   onStepReps: (dir: 1 | -1) => void;
+  /** A typed weight, in lb, from the laptop's field. Never called on the phone. */
+  onTypeWeight: (lb: number) => void;
+  /** Typed reps, from the laptop's field. Never called on the phone. */
+  onTypeReps: (reps: number) => void;
   onToggleRpe: () => void;
   rpeOpen: boolean;
   noteOpen: boolean;
@@ -152,6 +172,10 @@ export function ExerciseCard({
   useEffect(() => {
     if (focused) onRequestSuggest(exercise.id);
   }, [focused, exercise.id, onRequestSuggest]);
+
+  // On a laptop the two figures are typed fields: Tab from weight to reps,
+  // Enter logs. On the phone they open the pad, as they always have.
+  const wide = useIsWide();
 
   return (
     <Card>
@@ -179,6 +203,7 @@ export function ExerciseCard({
           onDown={() => onStepWeight(-1)}
           onUp={() => onStepWeight(1)}
           onTapValue={() => onOpenPad("weight")}
+          typed={wide ? { parse: parseTypedWeight, onValue: onTypeWeight, onSubmit: onLog, decimal: true } : null}
           accessibilityLabel="Weight"
         />
         <Stepper
@@ -187,6 +212,7 @@ export function ExerciseCard({
           onDown={() => onStepReps(-1)}
           onUp={() => onStepReps(1)}
           onTapValue={() => onOpenPad("reps")}
+          typed={wide ? { parse: parseTypedReps, onValue: onTypeReps, onSubmit: onLog, decimal: false } : null}
           accessibilityLabel="Reps"
         />
       </View>
@@ -320,6 +346,9 @@ function Advice({ suggest }: { suggest: SuggestPair }) {
  * Three tap zones in one 56pt row: step down, step up, and type an arbitrary
  * value. Tapping the figure is what keeps "I'm doing 227.5 today" to six taps
  * without putting a text field on a card that is otherwise all buttons.
+ *
+ * On a laptop (`typed` set) the figure IS a text field, and the two step keys
+ * leave the Tab order so that Tab goes straight from weight to reps.
  */
 function Stepper({
   value,
@@ -327,6 +356,7 @@ function Stepper({
   onDown,
   onUp,
   onTapValue,
+  typed,
   accessibilityLabel,
 }: {
   value: number | null;
@@ -334,8 +364,12 @@ function Stepper({
   onDown: () => void;
   onUp: () => void;
   onTapValue: () => void;
+  typed: TypedField | null;
   accessibilityLabel: string;
 }) {
+  // react-native-web reads `tabIndex` off a Pressable; native ignores it.
+  const offTabOrder = typed !== null ? { tabIndex: -1 as const } : null;
+
   return (
     <View style={styles.stepper}>
       <Pressable
@@ -343,34 +377,101 @@ function Stepper({
         accessibilityRole="button"
         accessibilityLabel={`${accessibilityLabel} down`}
         style={({ pressed }) => [styles.stepKey, pressed && styles.pressed]}
+        {...offTabOrder}
       >
         <Text style={styles.stepKeyText}>−</Text>
       </Pressable>
 
-      <Pressable
-        onPress={onTapValue}
-        accessibilityRole="button"
-        accessibilityLabel={`Set ${accessibilityLabel.toLowerCase()}`}
-        style={({ pressed }) => [styles.stepValue, pressed && styles.pressed]}
-      >
-        <Text style={styles.stepValueText}>
-          {value === null ? (
-            <Text style={styles.stepValuePlaceholder}>—</Text>
-          ) : (
-            fmtWeight(value)
-          )}
-          <Text style={styles.stepValueUnit}> {unit}</Text>
-        </Text>
-      </Pressable>
+      {typed !== null ? (
+        <TypedValue value={value} unit={unit} field={typed} label={accessibilityLabel} />
+      ) : (
+        <Pressable
+          onPress={onTapValue}
+          accessibilityRole="button"
+          accessibilityLabel={`Set ${accessibilityLabel.toLowerCase()}`}
+          style={({ pressed }) => [styles.stepValue, pressed && styles.pressed]}
+        >
+          <Text style={styles.stepValueText}>
+            {value === null ? (
+              <Text style={styles.stepValuePlaceholder}>—</Text>
+            ) : (
+              fmtWeight(value)
+            )}
+            <Text style={styles.stepValueUnit}> {unit}</Text>
+          </Text>
+        </Pressable>
+      )}
 
       <Pressable
         onPress={onUp}
         accessibilityRole="button"
         accessibilityLabel={`${accessibilityLabel} up`}
         style={({ pressed }) => [styles.stepKey, pressed && styles.pressed]}
+        {...offTabOrder}
       >
         <Text style={styles.stepKeyText}>+</Text>
       </Pressable>
+    </View>
+  );
+}
+
+interface TypedField {
+  /** Text to a figure, or null while the text is not one yet. See `typed-entry.ts`. */
+  parse: (text: string) => number | null;
+  onValue: (value: number) => void;
+  /** Enter: log the set the hero button now says. */
+  onSubmit: () => void;
+  decimal: boolean;
+}
+
+/**
+ * The laptop's typed figure.
+ *
+ * Every keystroke that reads as a figure goes straight into the draft, so the
+ * hero button says `LOG 185 × 5` while you are still typing and Enter logs
+ * exactly that — there is no separate commit step to forget. Text that is not
+ * a figure yet ("", "2" on the way to "20kg") leaves the draft alone.
+ *
+ * The field owns its text only while it has focus. Otherwise it shows the
+ * entry, so a step key, a logged set or a late suggestion all redraw it, and
+ * leaving the field tidies "20kg" into the 44.1 lb it was read as.
+ */
+function TypedValue({ value, unit, field, label }: {
+  value: number | null;
+  unit: string;
+  field: TypedField;
+  label: string;
+}) {
+  const shown = value === null ? "" : fmtWeight(value);
+  const [text, setText] = useState(shown);
+  const [editing, setEditing] = useState(false);
+
+  useEffect(() => {
+    if (!editing) setText(shown);
+  }, [shown, editing]);
+
+  return (
+    <View style={[styles.stepValue, styles.stepInputRow]}>
+      <TextInput
+        value={text}
+        onChangeText={(next) => {
+          setText(next);
+          const parsed = field.parse(next);
+          if (parsed !== null) field.onValue(parsed);
+        }}
+        onFocus={() => setEditing(true)}
+        onBlur={() => setEditing(false)}
+        onSubmitEditing={field.onSubmit}
+        // Selecting on focus is the pad's "the first digit replaces the
+        // prefill", in the browser's own terms.
+        selectTextOnFocus
+        inputMode={field.decimal ? "decimal" : "numeric"}
+        placeholder="—"
+        placeholderTextColor={color.muted}
+        accessibilityLabel={label}
+        style={styles.stepInput}
+      />
+      <Text style={styles.stepValueUnit}>{unit}</Text>
     </View>
   );
 }

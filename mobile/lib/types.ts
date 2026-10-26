@@ -215,6 +215,14 @@ export interface Bootstrap {
    */
   cues?: Record<string, string>;
   /**
+   * Whether this user has a Strava connection, for the Connections row on You.
+   *
+   * Optional because a server that predates it sends nothing, and the row then
+   * says it does not know rather than claiming "not connected" and offering to
+   * connect an account that may already be connected.
+   */
+  stravaConnected?: boolean;
+  /**
    * 56 days of bodyweight, intake and working-set counts, plus up to three
    * e1RM series. Raw, like `runs`: every streak, weekly bucket and rolling
    * mean the Today screen draws is a pure function in `features/today/model.ts`

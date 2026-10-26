@@ -1,8 +1,8 @@
 import { useCallback, useMemo, useState } from "react";
-import { Modal, StyleSheet, Text, View } from "react-native";
+import { Platform, StyleSheet, Text, View } from "react-native";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { Button, NumberPad, color, space } from "@/components/ui";
+import { Button, Overlay, NumberPad, color, space } from "@/components/ui";
 import { ApiError } from "@/lib/api";
 import { tapDone, tapError, tapSave, tapSelect } from "@/lib/haptics";
 import { enqueue } from "@/lib/outbox";
@@ -541,7 +541,13 @@ export function QuickLog({
           TYPE IT
         </Button>
 
-        {showVoice && (
+        {/*
+          Not in a browser. The mic is for a gym floor with chalk on your hands;
+          at a laptop, TYPE IT is faster and the keyboard is right there — and
+          recording in a browser tab is a permission prompt for a feature
+          nobody reaches for at a desk.
+        */}
+        {showVoice && Platform.OS !== "web" && (
           <VoiceButton
             exerciseName={exerciseName ?? null}
             onTranscribed={adoptTranscript}
@@ -730,9 +736,8 @@ export function QuickLog({
         most likely reason this screen is open, and "preacher curl" has to have
         an answer other than an empty list.
       */}
-      <Modal
+      <Overlay
         visible={picking !== null}
-        animationType="slide"
         onRequestClose={() => setPicking(null)}
       >
         {picking !== null && (
@@ -742,7 +747,7 @@ export function QuickLog({
             onCancel={() => setPicking(null)}
           />
         )}
-      </Modal>
+      </Overlay>
     </View>
   );
 }

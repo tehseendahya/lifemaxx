@@ -13,6 +13,7 @@ import {
 import { apiGet } from "@/lib/api";
 import { queryKeys } from "@/lib/query";
 import { tapError, tapSelect } from "@/lib/haptics";
+import { useIsWide } from "@/lib/layout";
 import type { CoachHistory } from "@/lib/types";
 
 import { canSend, fromHistory } from "./stream";
@@ -121,6 +122,7 @@ const styles = StyleSheet.create({
 
 export default function CoachScreen() {
   const router = useRouter();
+  const wide = useIsWide();
   const insets = useSafeAreaInsets();
   const client = useQueryClient();
   // `ComponentRef` rather than `ScrollView`: in React Native 0.88 ScrollView is
@@ -176,11 +178,13 @@ export default function CoachScreen() {
         title="Coach"
         subtitle="Your own data, with the sample size stated. Thin weeks still get an answer."
         scroll={false}
-        action={
+        // No Close on a laptop, where the coach is a place in the sidebar
+        // rather than a modal over Today: there is nothing to go back to.
+        action={wide ? undefined : (
           <Button variant="ghost" onPress={() => { tapSelect(); router.back(); }}>
             Close
           </Button>
-        }
+        )}
       >
         <ScrollView
           ref={scroller}

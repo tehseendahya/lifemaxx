@@ -2,7 +2,9 @@ import { Animated, Modal, Pressable, StyleSheet, Text, View, useWindowDimensions
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { ReactNode } from "react";
 
-import { sheetMaxHeight } from "./sheet-size";
+import { DIALOG_MAX_WIDTH, useIsWide } from "@/lib/layout";
+
+import { dialogMaxHeight, sheetMaxHeight } from "./sheet-size";
 import { color, radius, space } from "./tokens";
 import { useSlideIn } from "./useSlideIn";
 
@@ -27,6 +29,18 @@ const styles = StyleSheet.create({
     marginBottom: space.lg,
   },
   title: { color: color.ink, fontSize: 17, fontWeight: "600", marginBottom: space.md },
+
+  /** The laptop: a centred dialog rather than a panel on the bottom edge. */
+  dialogRoot: { flex: 1, justifyContent: "center", alignItems: "center", padding: space.xxl },
+  dialog: {
+    width: "100%",
+    maxWidth: DIALOG_MAX_WIDTH,
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    paddingTop: space.xl,
+    paddingBottom: space.xl,
+    paddingHorizontal: space.xl,
+  },
 });
 
 /**
@@ -56,6 +70,16 @@ const styles = StyleSheet.create({
  * The cap also fixes `useSlideIn`'s travel: it measures the panel, and a panel
  * that could be taller than the screen could animate from further away than
  * the screen is tall.
+ *
+ * ── ON A LAPTOP IT IS A DIALOG ─────────────────────────────────────────────
+ *
+ * A panel pinned to the bottom of a 1440px-wide window is a strip across the
+ * whole screen with the content at one end. On a wide web window the same
+ * children render in a centred dialog with no grabber (there is nothing to
+ * grab with a mouse). Escape closes it — react-native-web's `Modal` calls
+ * `onRequestClose` on Escape — and so does a click on the backdrop, through
+ * the same `Pressable` as the phone's tap. The height cap still applies, with
+ * room above and below instead of only above.
  */
 export function Sheet({ visible, onClose, children, title }: {
   visible: boolean;
@@ -65,13 +89,14 @@ export function Sheet({ visible, onClose, children, title }: {
 }) {
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
-  const { mounted, onPanelLayout, backdropStyle, panelStyle } = useSlideIn(visible);
+  const wide = useIsWide();
+  const { mounted, onPanelLayout, backdropStyle, panelStyle } = useSlideIn(visible, wide);
 
   if (!mounted) return null;
 
   return (
     <Modal visible transparent animationType="none" onRequestClose={onClose} statusBarTranslucent>
-      <View style={styles.root}>
+      <View style={wide ? styles.dialogRoot : styles.root}>
         <Pressable
           style={StyleSheet.absoluteFill}
           onPress={onClose}
@@ -86,13 +111,15 @@ export function Sheet({ visible, onClose, children, title }: {
           style={[
             styles.panel,
             panelStyle,
-            {
-              paddingBottom: insets.bottom + space.lg,
-              maxHeight: sheetMaxHeight(windowHeight, insets.top),
-            },
+            wide
+              ? [styles.dialog, { maxHeight: dialogMaxHeight(windowHeight) }]
+              : {
+                  paddingBottom: insets.bottom + space.lg,
+                  maxHeight: sheetMaxHeight(windowHeight, insets.top),
+                },
           ]}
         >
-          <View style={styles.grabber} />
+          {!wide && <View style={styles.grabber} />}
           {title ? <Text style={styles.title}>{title}</Text> : null}
           {children}
         </Animated.View>

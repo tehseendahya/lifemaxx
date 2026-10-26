@@ -2,7 +2,7 @@ import { useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 
 import {
-  Button, Empty, Screen, Spinner,
+  Button, Columns, Empty, Screen, Spinner,
   color, space,
 } from "@/components/ui";
 import { tapDone, tapError } from "@/lib/haptics";
@@ -165,13 +165,25 @@ export default function FoodScreen() {
       refreshing={day.refreshing}
       onRefresh={day.onRefresh}
     >
-      <MealCapture
-        localDate={day.selected}
-        dayLabel={day.shown !== null && day.today !== null ? relativeDayLabel(day.shown, day.today) : null}
-        onSaved={() => { setNotice(null); day.invalidateDay(); }}
+      {/*
+        On a laptop the composer and the day sit side by side, so the meals you
+        are logging against stay in view while you type. On the phone, the
+        composer first, as before.
+      */}
+      <Columns
+        left={
+          <>
+          <MealCapture
+            localDate={day.selected}
+            dayLabel={day.shown !== null && day.today !== null ? relativeDayLabel(day.shown, day.today) : null}
+            onSaved={() => { setNotice(null); day.invalidateDay(); }}
       />
 
       {notice !== null ? <Text style={styles.notice}>{notice}</Text> : null}
+      </>
+        }
+        right={
+      <>
 
       {day.loading ? (
         <View style={styles.centre}><Spinner size="large" /></View>
@@ -210,6 +222,9 @@ export default function FoodScreen() {
           )}
         </>
       ) : null}
+      </>
+        }
+      />
 
       {/*
         Tapping a meal opens its item editor: edit is the primary action (the

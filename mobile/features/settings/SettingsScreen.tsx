@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { useLocalSearchParams } from "expo-router";
 import { useQueryClient } from "@tanstack/react-query";
 
 import {
-  Button, Card, Empty, Label, Screen, Spinner, Stat, Toggle,
+  Button, Card, Columns, Empty, Label, Screen, Spinner, Stat, Toggle,
   color, font, hit, radius, space, tnum,
 } from "@/components/ui";
 import { ProgressDots } from "@/components/ui/ProgressDots";
@@ -30,6 +31,8 @@ import { WeighInPad } from "@/features/today/WeighInPad";
 import type { Bootstrap } from "@/lib/types";
 
 import { useReachability } from "./ConnectionCard";
+import { stravaNotice } from "./connections";
+import { ConnectionsCard } from "./ConnectionsCard";
 import { buildMaintenance, buildWeighIn, targetSaveLabel, weighInStrip } from "./model";
 import type { ProposalKey } from "./model";
 import { SettingsRows } from "./SettingsRows";
@@ -44,6 +47,10 @@ import { SettingsRows } from "./SettingsRows";
  * fourteen-day strip that fills every morning), then calibration progress or
  * the measured maintenance with target chips that actually save, then goals
  * as meters. Server, account and about are one grouped list at the bottom.
+ *
+ * On a laptop the cards sit in two columns: the body and maintenance on the
+ * left, goals and the settings on the right — the phone's order, split where
+ * the reading turns into configuring.
  *
  * `bootstrap` is read once at the top and drilled into the cards as a prop.
  * Calling `useBootstrap()` in each card would work — react-query dedupes by key
@@ -112,6 +119,7 @@ const styles = StyleSheet.create({
   pressed: { opacity: 0.7 },
 
   centre: { paddingTop: space.xxl * 2, alignItems: "center" },
+  notice: { fontSize: 13, lineHeight: 19, marginBottom: space.md },
 });
 
 export default function SettingsScreen() {
@@ -134,6 +142,19 @@ export default function SettingsScreen() {
     client.removeQueries({ queryKey: queryKeys.coach });
   }, [client]);
 
+  /*
+   * The Strava OAuth round trip lands back here as `/you?strava=connected` (or
+   * `=error`). Shown once, above everything; the flag in `bootstrap` is what
+   * actually flips the row, on the refetch this screen does on focus.
+   */
+  const { strava } = useLocalSearchParams<{ strava?: string | string[] }>();
+  const landed = stravaNotice(strava);
+  const notice = landed === null ? null : (
+    <Text style={[styles.notice, { color: landed.tone === "bad" ? color.bad : color.good }]}>
+      {landed.text}
+    </Text>
+  );
+
   const settings = (
     <SettingsRows probe={probe} onBaseChanged={onBaseChanged} email={session?.email ?? ""} />
   );
@@ -141,6 +162,7 @@ export default function SettingsScreen() {
   if (!data) {
     return (
       <Screen title="You">
+        {notice}
         {loading ? (
           <View style={styles.centre}><Spinner size="large" /></View>
         ) : (
@@ -160,10 +182,22 @@ export default function SettingsScreen() {
 
   return (
     <Screen title="You" refreshing={refreshing} onRefresh={onRefresh}>
-      <BodyCard data={data} />
-      <MaintenanceCard data={data} />
-      <GoalsCard data={data} />
-      {settings}
+      {notice}
+      <Columns
+        left={
+          <>
+            <BodyCard data={data} />
+            <MaintenanceCard data={data} />
+          </>
+        }
+        right={
+          <>
+            <GoalsCard data={data} />
+            <ConnectionsCard stravaConnected={data.stravaConnected} />
+            {settings}
+          </>
+        }
+      />
     </Screen>
   );
 }
