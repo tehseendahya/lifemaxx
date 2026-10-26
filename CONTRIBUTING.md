@@ -42,7 +42,7 @@ npm install              # root (backend). The client's typecheck needs it too.
 cd mobile && npm install # the client is a separate npm project with its own React
 ```
 
-Use Node 22 (CI does). Never install client packages at the root or the other
+Use Node 24 (CI and Vercel do; npm 11 writes the lockfile differently from npm 10). Never install client packages at the root or the other
 way round. To add a client dependency, use `cd mobile && npx expo install
 <pkg>`, and only packages that work inside Expo Go (see
 [`mobile/README.md`](mobile/README.md#the-expo-go-constraint)).
