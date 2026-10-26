@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyKey, BACKSPACE, displayValue, MAX_LENGTH, padKeys } from "./keypad";
+import { applyFirstKey, applyKey, BACKSPACE, displayValue, MAX_LENGTH, padKeys } from "./keypad";
 
 /** Press a whole string of keys in order, the way a thumb would. */
 function type(keys: string, allowDecimal = true, from = ""): string {
@@ -88,5 +88,73 @@ describe("displayValue", () => {
     expect(displayValue("")).toBe("0");
     expect(displayValue("0")).toBe("0");
     expect(displayValue("1.5")).toBe("1.5");
+  });
+});
+
+describe("typing over a prefilled value", () => {
+  /**
+   * The owner's report, in one line: *"if I go up to 225 on one set it'd say
+   * 220225 instead of 225"*.
+   *
+   * The pad opens prefilled from the last set, the model's estimate or
+   * yesterday's bodyweight, and until now the first digit appended to that.
+   */
+
+  it("replaces the prefill with the first digit instead of appending", () => {
+    // The reported bug, exactly: 220 on screen, "225" typed.
+    let value = "220";
+    value = applyFirstKey(value, "2", true);
+    value = applyKey(value, "2", true);
+    value = applyKey(value, "5", true);
+    expect(value).toBe("225");
+  });
+
+  it("would have produced the reported 220225 without it", () => {
+    // Documents what this function is for, so it cannot be deleted as a
+    // needless wrapper around `applyKey`.
+    let value = "220";
+    for (const key of ["2", "2", "5"]) value = applyKey(value, key, true);
+    expect(value).toBe("220225");
+  });
+
+  it("backspaces the prefill in place rather than wiping it", () => {
+    // Two taps for one plate up, which is the commonest correction there is —
+    // wiping to "" would make it four.
+    let value = applyFirstKey("220", BACKSPACE, true);
+    expect(value).toBe("22");
+    value = applyKey(value, "5", true);
+    expect(value).toBe("225");
+  });
+
+  it("starts a new number from a leading decimal point", () => {
+    expect(applyFirstKey("220", ".", true)).toBe("0.");
+    expect(applyFirstKey("220", ".", false)).toBe("220");
+  });
+
+  it("behaves exactly like applyKey when there is no prefill", () => {
+    for (const key of padKeys(true)) {
+      expect(applyFirstKey("", key, true)).toBe(applyKey("", key, true));
+    }
+  });
+
+  it("ignores the inert slot, like applyKey does", () => {
+    expect(applyFirstKey("220", null, false)).toBe("220");
+  });
+
+  it("cannot produce a value longer than the pad allows", () => {
+    // Replacing makes this nearly impossible to hit, but a six-digit prefill
+    // backspaced and retyped must still obey the ceiling.
+    let value = applyFirstKey("999999", "1", true);
+    for (const key of ["2", "3", "4", "5", "6", "7", "8"]) value = applyKey(value, key, true);
+    expect(value.length).toBeLessThanOrEqual(MAX_LENGTH);
+  });
+
+  it("never produces a string Number() cannot read", () => {
+    for (const prefill of ["220", "0", "0.5", "", "1000.5"]) {
+      for (const key of [...padKeys(true), "x", "-"]) {
+        const next = applyFirstKey(prefill, key, true);
+        if (next !== "") expect(Number.isNaN(Number(next)), `${prefill} + ${key}`).toBe(false);
+      }
+    }
   });
 });

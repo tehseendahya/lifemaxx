@@ -1,9 +1,10 @@
+import { useEffect, useState } from "react";
 import { Animated, Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Button } from "./Button";
 import { Label } from "./Label";
-import { BACKSPACE, applyKey, displayValue, padKeys } from "./keypad";
+import { BACKSPACE, applyFirstKey, applyKey, displayValue, padKeys } from "./keypad";
 import { color, radius, space, tnum } from "./tokens";
 import { useSlideIn } from "./useSlideIn";
 
@@ -86,6 +87,13 @@ const styles = StyleSheet.create({
  * "untouched, use the suggestion" rather than 0 lb, and only the caller knows
  * that. The string is always something `Number()` can read; see `keypad.ts`.
  *
+ * The one piece of state it keeps is whether the figure on screen is still the
+ * PREFILL the caller opened with, because the first digit replaces a prefill
+ * rather than appending to it — see `applyFirstKey`. That is selection state,
+ * not value state: a text field tracks its own selection too, and the value is
+ * still entirely the caller's. Keeping it here rather than in the five screens
+ * that open this pad is also the only way all five behave the same.
+ *
  * It fires no haptics, for the same reason `Button` does not: a key press, a
  * save and a cancel should not feel alike, and only the feature knows which is
  * which. Call `tapSelect()` from `onChange` and `tapSave()` from `onDone`.
@@ -131,6 +139,24 @@ export function NumberPad({
 }) {
   const insets = useSafeAreaInsets();
   const { mounted, onPanelLayout, backdropStyle, panelStyle } = useSlideIn(visible);
+
+  /*
+   * Reset on OPEN rather than on a change of `value`.
+   *
+   * The caller sets the prefill and opens the pad in the same batch, so there
+   * is no separate "the value changed" moment to hang this on — and hanging it
+   * on `value` would re-arm the replace every time the caller echoed a digit
+   * back, which is every keystroke. An open is the only event that means "this
+   * figure is a suggestion, not something you typed".
+   *
+   * `visible` is also what every caller flips between two fields: the weight
+   * pad closes before the reps pad opens, because the control that opens
+   * either one is behind this modal.
+   */
+  const [replacing, setReplacing] = useState(true);
+  useEffect(() => {
+    if (visible) setReplacing(true);
+  }, [visible]);
 
   if (!mounted) return null;
 
@@ -218,7 +244,16 @@ export function NumberPad({
                   return (
                     <Pressable
                       key={key}
-                      onPress={() => onChange(applyKey(value, key, allowDecimal))}
+                      onPress={() => {
+                        onChange(
+                          replacing
+                            ? applyFirstKey(value, key, allowDecimal)
+                            : applyKey(value, key, allowDecimal),
+                        );
+                        // Every real key ends it, backspace included: after 220
+                        // becomes 22, the next digit has to append.
+                        setReplacing(false);
+                      }}
                       accessibilityRole="button"
                       accessibilityLabel={isBackspace ? "Delete" : key}
                       style={({ pressed }) => [
