@@ -88,12 +88,19 @@ describe("lift", () => {
     }]);
   });
 
-  it("refuses to guess from a partial name", () => {
-    // "bench" alone is not "Barbell Bench Press". The row lands in `rest`
-    // rather than becoming a gap against a lift that was never named.
+  it("reads the bare word 'bench' as the barbell bench, through the nickname table", () => {
+    // This used to land in `rest`. It is how the main lifts are written, and
+    // the nickname table maps it to exactly one slug, so it is no longer a guess.
     const { claims, rest } = extract("bench 225 by March");
-    expect(claims).toEqual([]);
-    expect(rest).toEqual(["bench 225 by March"]);
+    expect(claims).toEqual([{
+      kind: "lift",
+      sentence: "bench 225 by March",
+      exerciseId: "ex-bench",
+      exerciseName: "Barbell Bench Press",
+      targetLb: 225,
+      byDate: "2027-03-01",
+    }]);
+    expect(rest).toEqual([]);
   });
 
   it("prefers the more specific of two matching names", () => {
@@ -308,8 +315,11 @@ describe("plural tolerance", () => {
   });
 
   it("still refuses a partial name — the needle did not get looser", () => {
-    expect(matchExercise("bench 225 by March", WITH_PULLUP)).toBeNull();
+    // "bench" alone reaches the barbell bench only through the exact nickname
+    // table; a word that merely starts with it reaches nothing.
+    expect(matchExercise("bench 225 by March", WITH_PULLUP)?.name).toBe("Barbell Bench Press");
     expect(matchExercise("benches 225", WITH_PULLUP)).toBeNull();
+    expect(matchExercise("benching 225", WITH_PULLUP)).toBeNull();
   });
 
   it("does not match a bare muscle name to anything", () => {
@@ -423,5 +433,155 @@ describe("the helpers the new kinds added", () => {
     expect(unitWeightLbIn("45lb plate")).toBe(45);
     expect(unitWeightLbIn("20 kg plate")).toBe(44);
     expect(unitWeightLbIn("225 by March")).toBeNull();
+  });
+});
+
+/*
+ * ─────────────────────────────────────────────────────────────────────────────
+ * The "bench press goal shown as Dumbbell Bench Press" bug.
+ *
+ * Stripping equipment words made Barbell and Dumbbell Bench Press both
+ * `{bench, press}`, and "longer name wins" gave the tie to the dumbbell row by
+ * one character. The fixture above has only the barbell row, which is why the
+ * tie was never exercised. These use the real catalogue names and slugs.
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+
+const row = (id: string, name: string, slug: string, equipment: string): CatalogueExercise => ({
+  id, name, slug, incrementLb: 5, equipment, muscles: [],
+});
+
+const BB_BENCH = row("bb-bench", "Barbell Bench Press", "barbell-bench-press", "barbell");
+const DB_BENCH = row("db-bench", "Dumbbell Bench Press", "dumbbell-bench-press", "dumbbell");
+const SMITH_BENCH = row("smith-bench", "Smith Machine Bench Press", "smith-machine-bench-press", "machine");
+const CG_BENCH = row("cg-bench", "Close-Grip Bench Press", "close-grip-bench-press", "barbell");
+const INCLINE_BB = row("incline-bb", "Incline Barbell Press", "incline-barbell-press", "barbell");
+const BACK_SQUAT = row("back-squat", "Back Squat", "back-squat", "barbell");
+const FRONT_SQUAT = row("front-squat", "Front Squat", "front-squat", "barbell");
+const DEADLIFT = row("deadlift", "Deadlift", "deadlift", "barbell");
+const OHP = row("ohp", "Overhead Press", "overhead-press", "barbell");
+const DB_OHP = row("db-ohp", "Dumbbell Shoulder Press", "dumbbell-shoulder-press", "dumbbell");
+
+/** Alphabetical, the order bootstrap sends — the dumbbell row after the barbell. */
+const BENCHES = [BB_BENCH, CG_BENCH, DB_BENCH, SMITH_BENCH];
+/** And the reverse, so no assertion is passing on catalogue order alone. */
+const BENCHES_REVERSED = [...BENCHES].reverse();
+
+const REAL: CatalogueExercise[] = [
+  BACK_SQUAT, BB_BENCH, CG_BENCH, DEADLIFT, DB_BENCH, DB_OHP, FRONT_SQUAT, INCLINE_BB, OHP,
+  SMITH_BENCH,
+];
+
+describe("matchExercise: equipment", () => {
+  for (const [order, catalogue] of [["sent order", BENCHES], ["reverse", BENCHES_REVERSED]] as const) {
+    describe(`with the catalogue in ${order}`, () => {
+      it("reads an unqualified 'bench press' as the barbell lift", () => {
+        expect(matchExercise("205 bench press by December", catalogue)?.id).toBe("bb-bench");
+      });
+
+      it("reads 'barbell bench press' as the barbell lift", () => {
+        expect(matchExercise("205 barbell bench press by Dec", catalogue)?.id).toBe("bb-bench");
+      });
+
+      it("reads 'dumbbell bench press' as the dumbbell lift", () => {
+        expect(matchExercise("80 dumbbell bench press", catalogue)?.id).toBe("db-bench");
+      });
+
+      it("reads 'db bench press' as the dumbbell lift", () => {
+        expect(matchExercise("db bench press 80", catalogue)?.id).toBe("db-bench");
+      });
+
+      it("reads 'smith bench press' as the smith machine lift", () => {
+        expect(matchExercise("smith bench press 185", catalogue)?.id).toBe("smith-bench");
+      });
+
+      it("reads 'close grip bench press' as the close-grip lift", () => {
+        expect(matchExercise("close grip bench press 185", catalogue)?.id).toBe("cg-bench");
+      });
+    });
+  }
+
+  it("rejects a row whose implement contradicts the sentence instead of falling back", () => {
+    // No dumbbell row in this catalogue. The barbell row matches on tokens but
+    // names a different implement, so the honest answer is nothing.
+    expect(matchExercise("80 dumbbell bench press", [BB_BENCH])).toBeNull();
+    expect(matchExercise("200 barbell bench press", [DB_BENCH])).toBeNull();
+  });
+
+  it("still takes a non-barbell row when it is the only one and nothing was said", () => {
+    // The default-implement rule ranks; it does not reject.
+    expect(matchExercise("bench press 80", [DB_BENCH])?.id).toBe("db-bench");
+  });
+});
+
+describe("matchExercise: nicknames", () => {
+  it("bench → Barbell Bench Press", () => {
+    expect(matchExercise("bench 225 by March", REAL)?.id).toBe("bb-bench");
+  });
+
+  it("squat → Back Squat", () => {
+    expect(matchExercise("squat 315 by May", REAL)?.id).toBe("back-squat");
+    expect(matchExercise("squats 315", REAL)?.id).toBe("back-squat");
+  });
+
+  it("dl → Deadlift", () => {
+    expect(matchExercise("dl 405", REAL)?.id).toBe("deadlift");
+  });
+
+  it("ohp → Overhead Press", () => {
+    expect(matchExercise("ohp 135 by June", REAL)?.id).toBe("ohp");
+  });
+
+  it("does not fire with a qualifier the catalogue did not resolve", () => {
+    // "incline bench" is not the bench press, and "Incline Barbell Press"
+    // needs "press", so the answer is nothing — never the flat bench.
+    expect(matchExercise("incline bench 185", REAL)).toBeNull();
+    expect(matchExercise("db bench 80", REAL)).toBeNull();
+    expect(matchExercise("machine bench 200", REAL)).toBeNull();
+    expect(matchExercise("box squat 275", REAL)).toBeNull();
+    expect(matchExercise("sumo dl 405", REAL)).toBeNull();
+  });
+
+  it("leaves a full catalogue name to the full-name pass", () => {
+    // "front squat" is in the catalogue, so the nickname is never consulted.
+    expect(matchExercise("front squat 225", REAL)?.id).toBe("front-squat");
+  });
+
+  it("refuses a sentence that nicknames two lifts", () => {
+    expect(matchExercise("bench 225 and squat 315", REAL)).toBeNull();
+  });
+
+  it("refuses when the catalogue has no row with that slug", () => {
+    expect(matchExercise("bench 225", [DB_BENCH])).toBeNull();
+  });
+
+  it("is a whole-word lookup, not a property lookup", () => {
+    expect(matchExercise("constructor 225", REAL)).toBeNull();
+  });
+});
+
+describe("the goals bug, end to end", () => {
+  it("files the owner's main-lifts line as two barbell bench claims", () => {
+    const { claims } = extractGoalClaims(
+      "Main lifts: 205 bench press by December, 225 by May.",
+      REAL,
+      TODAY,
+    );
+    expect(claims.map((c) => (c.kind === "lift" ? [c.exerciseId, c.targetLb] : c.kind))).toEqual([
+      ["bb-bench", 205],
+      ["bb-bench", 225],
+    ]);
+  });
+
+  it("files 'squat 315 by May' as a Back Squat target", () => {
+    const { claims } = extractGoalClaims("squat 315 by May", REAL, TODAY);
+    expect(claims).toEqual([{
+      kind: "lift",
+      sentence: "squat 315 by May",
+      exerciseId: "back-squat",
+      exerciseName: "Back Squat",
+      targetLb: 315,
+      byDate: "2027-05-01",
+    }]);
   });
 });
