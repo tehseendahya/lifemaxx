@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { CATALOGUE, TODAY, bootstrap, day, liftHistory, ranked, run } from "./fixture";
 import {
   buildTodayModel, consistencyBlock, currentWeightLb, formatDuration, formatLongDate,
-  formatShortDate, gapFor, goalsBlock, intakeDaysIn, liftDaysIn, loadBlock, median,
+  formatShortDate, gapFor, goalsBlock, intakeDaysIn, liftDaysIn, loadBlock,
   rollingMean, signed, strengthRows, trajectory, weighInStreak, withinDays,
 } from "./model";
 import type { GoalClaim } from "./goals";
@@ -54,12 +54,6 @@ describe("dates", () => {
     expect(signed(-0.36, 1)).toBe("−0.4");
     expect(signed(0.36, 1)).toBe("+0.4");
     expect(signed(0, 1)).toBe("0.0");
-  });
-
-  it("takes the median of an even-length series", () => {
-    expect(median([1, 2, 3, 4])).toBe(2.5);
-    expect(median([5])).toBe(5);
-    expect(median([])).toBe(0);
   });
 });
 
@@ -255,20 +249,23 @@ describe("trajectory", () => {
 describe("goals", () => {
   it("is an invitation when nothing is written down", () => {
     const block = goalsBlock(firstWeek());
-    expect(block.rows).toEqual([]);
-    expect(block.empty).toBe(
-      "Nothing written down yet. What you're actually training for goes on the You screen.",
-    );
+    expect(block.targets).toEqual([]);
+    expect(block.aims).toEqual([]);
+    expect(block.context).toEqual([]);
+    expect(block.empty).toContain("bench 205 by December");
   });
 
-  it("shows unreadable prose verbatim and says what would make it measurable", () => {
-    const block = goalsBlock(bootstrap({ goalsText: "Feel strong. Sleep more." }));
-    expect(block.rows).toEqual([]);
-    expect(block.rest).toEqual(["Feel strong", "Sleep more"]);
+  it("splits unmatched prose into aims and context, both verbatim", () => {
+    const block = goalsBlock(bootstrap({
+      goalsText: "Feel strong. Sleep more. Current split: push, pull, legs.",
+    }));
+    expect(block.targets).toEqual([]);
+    expect(block.aims).toEqual(["Feel strong", "Sleep more"]);
+    expect(block.context).toEqual(["Current split: push, pull, legs"]);
     expect(block.note).toContain("No measurable target in this yet");
   });
 
-  it("pairs each claim with its gap and its deadline", () => {
+  it("pairs each claim with a headline, its gap and its deadline", () => {
     const block = goalsBlock(bootstrap({
       goalsText: "Bench press 225 by March. Get to 175 lb.",
       catalogue: CATALOGUE,
@@ -279,13 +276,15 @@ describe("goals", () => {
       },
     }));
 
-    expect(block.rows).toHaveLength(2);
-    expect(block.rows[0].sentence).toBe("Bench press 225 by March");
-    expect(block.rows[0].gap).toEqual({ text: "e1RM 216 → 225 · +9 lb", tone: "ink" });
+    expect(block.targets).toHaveLength(2);
+    expect(block.targets[0].headline).toBe("Barbell Bench Press → 225 lb");
+    expect(block.targets[0].sentence).toBe("Bench press 225 by March");
+    expect(block.targets[0].gap).toEqual({ text: "e1RM 216 → 225 · +9 lb", tone: "ink" });
     // 2027-03-01 is 127 days out: 18 whole weeks.
-    expect(block.rows[0].deadline).toEqual({ label: "18w", tone: "muted" });
-    expect(block.rows[1].gap.text).toContain("181 → 175");
-    expect(block.rows[1].deadline).toBeNull();
+    expect(block.targets[0].deadline).toEqual({ label: "18 weeks left", tone: "muted" });
+    expect(block.targets[1].headline).toBe("Bodyweight → 175 lb");
+    expect(block.targets[1].gap.text).toContain("181 → 175");
+    expect(block.targets[1].deadline).toBeNull();
   });
 
   it("warns on a tight deadline that is not met", () => {
@@ -294,7 +293,7 @@ describe("goals", () => {
       catalogue: CATALOGUE,
     }));
     // 1 November is seven days out: one whole week, and inside the warn band.
-    expect(block.rows[0].deadline).toEqual({ label: "1w", tone: "warn" });
+    expect(block.targets[0].deadline).toEqual({ label: "1 week left", tone: "warn" });
   });
 
   it("does not warn on a tight deadline that is already met", () => {
@@ -302,8 +301,160 @@ describe("goals", () => {
       goalsText: "Get to 181 lb by November.",
       catalogue: CATALOGUE,
     }));
-    expect(block.rows[0].gap.tone).toBe("good");
-    expect(block.rows[0].deadline!.tone).toBe("muted");
+    expect(block.targets[0].gap.tone).toBe("good");
+    expect(block.targets[0].deadline!.tone).toBe("muted");
+  });
+
+  /*
+   * The owner's real goals text, which is the acceptance test for this card.
+   * Their one logged session is a bench at 175x3/165x5 — Epley gives 192.5 both
+   * ways — so the bench row has to read "+12 lb" and NOT a pace line.
+   */
+  describe("the owner's own text, with one logged session", () => {
+    const OWNER = [
+      "Main priority is strength on compound lifts, getting arms to be bigger, and getting good strong abs.",
+      "Main lifts: 205 bench press by December, 225 by May.",
+      "10 weighted pull ups with 45lb plate by May",
+      "Current split: chest, side delts, and biceps, back, rear delts, and triceps, legs",
+      "Abs and run 2x per week",
+    ].join("\n");
+
+    const owner = () => goalsBlock(bootstrap({
+      goalsText: OWNER,
+      catalogue: [
+        ...CATALOGUE,
+        {
+          id: "ex-wpu",
+          name: "Weighted Pull-Up",
+          slug: "weighted-pull-up",
+          incrementLb: 5,
+          equipment: "bodyweight",
+          muscles: [],
+        },
+      ],
+      lastSets: {
+        "ex-bench": {
+          localDate: "2026-10-21", weightLb: 165, reps: 5, rpe: 7, sets: 4, bestE1rmLb: 192.5,
+        },
+      },
+      history: { days: liftHistory(), mainLifts: [] },
+    }));
+
+    it("tracks three targets, one aim and two context lines", () => {
+      const block = owner();
+      expect(block.targets.map((t) => t.headline)).toEqual([
+        "Barbell Bench Press → 205 lb",
+        "Barbell Bench Press → 225 lb",
+        "Weighted Pull-Up → 10 × 45 lb",
+      ]);
+      expect(block.aims).toEqual([
+        "Main priority is strength on compound lifts, getting arms to be bigger, "
+          + "and getting good strong abs",
+      ]);
+      expect(block.context).toEqual([
+        "Current split: chest, side delts, and biceps, back, rear delts, and triceps, legs",
+        "Abs and run 2x per week",
+      ]);
+      expect(block.note).toBeNull();
+    });
+
+    it("reads the December bench target off one session", () => {
+      const [dec] = owner().targets;
+      expect(dec.gap).toEqual({ text: "e1RM 193 → 205 · +12 lb", tone: "ink" });
+      expect(dec.deadline).toEqual({ label: "5 weeks left", tone: "muted" });
+      expect(dec.sentence).toBe("Main lifts: 205 bench press by December, 225 by May");
+    });
+
+    it("renders the rep target as a fact beside the target, never a weight gap", () => {
+      const pullup = owner().targets[2];
+      // Measured against the bench's e1RM it would be `−135 lb`, tone good: an
+      // unmet goal reported as achieved. There is no lastSets row for the
+      // pull-up, so the honest answer is that it has never been logged.
+      expect(pullup.gap).toEqual({ text: "never logged", tone: "muted" });
+    });
+
+    it("shows no pace line anywhere — one point has no rate", () => {
+      expect(owner().targets.every((t) => t.pace === null)).toBe(true);
+    });
+  });
+
+  describe("pace", () => {
+    const dated = (goalsText: string, over = {}) => goalsBlock(bootstrap({
+      goalsText,
+      catalogue: CATALOGUE,
+      ...over,
+    }));
+
+    it("appears once two e1RM points span a fortnight", () => {
+      const block = dated("Bench press 225 by December.", {
+        history: {
+          days: liftHistory(),
+          mainLifts: [{
+            exerciseId: "ex-bench",
+            name: "Barbell Bench Press",
+            points: [
+              { date: "2026-09-20", e1rmLb: 195 },
+              { date: "2026-10-18", e1rmLb: 205 },
+            ],
+          }],
+        },
+      });
+      // 10 lb over 4 weeks = 2.5/wk; 20 lb to go over 5.28 weeks = 3.8/wk.
+      expect(block.targets[0].pace).toEqual({
+        text: "needs 3.8 lb/wk · doing 2.5 lb/wk",
+        tone: "warn",
+      });
+    });
+
+    it("stays null when the two points are closer together than a fortnight", () => {
+      const block = dated("Bench press 225 by December.", {
+        history: {
+          days: liftHistory(),
+          mainLifts: [{
+            exerciseId: "ex-bench",
+            name: "Barbell Bench Press",
+            points: [
+              { date: "2026-10-11", e1rmLb: 195 },
+              { date: "2026-10-18", e1rmLb: 205 },
+            ],
+          }],
+        },
+      });
+      expect(block.targets[0].pace).toBeNull();
+    });
+
+    it("reads a cut in the direction of the goal, not by raw comparison", () => {
+      /*
+       * The fit says 181.0 lb and the target is 175 by 1 December, so the owner
+       * needs −1.1 lb/wk and is doing −1.6. That is AHEAD. The brief's literal
+       * `actual < required` reads −1.6 < −1.1 and calls it behind, which is the
+       * whole reason this comparison is made in the direction of `delta`.
+       */
+      const block = dated("Get to 175 lb by December.", {
+        history: {
+          days: [
+            day("2026-09-20", { weightLb: 188 }),
+            day("2026-10-25", { weightLb: 180 }),
+          ],
+          mainLifts: [],
+        },
+      });
+      expect(block.targets[0].pace!.tone).toBe("muted");
+    });
+
+    it("is withheld from a rep target and from a run target", () => {
+      const reps = goalsBlock(bootstrap({
+        goalsText: "10 weighted pull ups with 45lb plate by May",
+        catalogue: [...CATALOGUE, {
+          id: "ex-wpu", name: "Weighted Pull-Up", slug: "weighted-pull-up",
+          incrementLb: 5, equipment: "bodyweight", muscles: [],
+        }],
+      }));
+      expect(reps.targets[0].pace).toBeNull();
+
+      const run = dated("Half marathon by March.");
+      expect(run.targets[0].pace).toBeNull();
+    });
   });
 });
 
@@ -449,47 +600,43 @@ describe("strength", () => {
 });
 
 describe("load", () => {
-  it("buckets working sets into eight Monday-start weeks, oldest first", () => {
-    const days = [
-      day("2026-08-31", { hardSets: 10 }), // the first bucket's Monday
-      day("2026-09-06", { hardSets: 5 }), // the Sunday of the same week
-      day("2026-10-19", { hardSets: 7 }), // the current, partial week
-      day("2026-10-21", { hardSets: 9 }),
-      day("2026-08-24", { hardSets: 99 }), // older than the window
-    ];
-    const load = loadBlock(bootstrap({ history: { days, mainLifts: [] } }));
+  it("buckets run mileage into eight Monday-start weeks, oldest first", () => {
+    const load = loadBlock(bootstrap({
+      runs: [run({ localDate: "2026-10-20" }), run({ id: "r2", localDate: "2026-09-02" })],
+    }));
 
     expect(load.weekStarts[0]).toBe("2026-08-31");
     expect(load.weekStarts[7]).toBe("2026-10-19");
-    expect(load.hardSets).toEqual([15, 0, 0, 0, 0, 0, 0, 16]);
-    expect(load.medianLabel).toBeNull();
+    expect(load.runMiles[7]).toBe(5);
+    expect(load.runMiles[0]).toBe(5);
+    expect(load.runMiles[1]).toBe(0);
     expect(load.partialIndex).toBe(7);
     expect(load.xLabels).toEqual({ left: "31 Aug", right: "THIS WK" });
     expect(load.empty).toBe(false);
   });
 
-  it("takes the median across all eight buckets, zeroes included", () => {
-    const load = loadBlock(bootstrap({
-      history: {
-        days: [day("2026-10-19", { hardSets: 20 }), day("2026-10-12", { hardSets: 10 })],
-        mainLifts: [],
-      },
-    }));
-    expect(load.median).toBe(0);
-    // No reference label: a dashed line on the baseline is not information.
-    expect(load.medianLabel).toBeNull();
+  /*
+   * The regression test for the owner's complaint: "I don't get this weekly
+   * hard sets thing. What's the y axis." The muscle-blind 8-week set total is
+   * gone from this block and is not re-homed anywhere — `volumeBlock` draws the
+   * per-muscle week instead. A payload full of working sets and no runs is
+   * `empty`, because this card is now one measure in one unit.
+   */
+  it("carries no set series at all, and is empty on mileage alone", () => {
+    const days = [
+      day("2026-08-31", { hardSets: 10 }),
+      day("2026-10-19", { hardSets: 7 }),
+      day("2026-10-21", { hardSets: 9 }),
+    ];
+    const load = loadBlock(bootstrap({ history: { days, mainLifts: [] }, runs: [] }));
+
+    expect(load.empty).toBe(true);
+    expect(JSON.stringify(load)).not.toContain("hardSets");
+    expect(Object.keys(load).sort())
+      .toEqual(["empty", "partialIndex", "runMiles", "weekStarts", "xLabels"]);
   });
 
-  it("puts run mileage in its own series over the same buckets", () => {
-    const load = loadBlock(bootstrap({
-      runs: [run({ localDate: "2026-10-20" }), run({ id: "r2", localDate: "2026-09-02" })],
-    }));
-    expect(load.runMiles[7]).toBe(5);
-    expect(load.runMiles[0]).toBe(5);
-    expect(load.runMiles[1]).toBe(0);
-  });
-
-  it("reports empty only when both series are flat for eight weeks", () => {
+  it("reports empty only when there is no mileage in eight weeks", () => {
     expect(loadBlock(firstWeek()).empty).toBe(true);
     expect(loadBlock(bootstrap({
       history: { days: [], mainLifts: [] },

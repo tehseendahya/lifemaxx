@@ -15,7 +15,7 @@ import {
   localSetFrom,
   mergeSets,
   numberToPad,
-  owedLine,
+  owedMuscles,
   padToNumber,
   partitionByOwed,
   pillParts,
@@ -31,7 +31,24 @@ import {
   stepWeight,
   type Draft,
   type LocalSet,
+  EDIT_MAX_REPS,
+  EDIT_MAX_WEIGHT_LB,
+  applyEdits,
+  editBlockedReason,
+  editChanged,
+  editFromSet,
+  editSetPayload,
+  pruneEdits,
+  type DisplaySet,
+  type SetEdits,
 } from "./logic";
+/*
+ * The real `SANITY` and the real bound the route applies, imported RELATIVELY
+ * and only ever in node. `src/lib/llm/shorthand.ts` has no imports of its own,
+ * so this costs nothing here and never reaches Metro — which is what lets the
+ * phone keep its own copy of two numbers without them being able to drift.
+ */
+import { SANITY, setWithinSanity } from "../../../src/lib/llm/shorthand";
 import type { CatalogueExercise, LastSet, RankedMuscle, SessionSet } from "@/lib/types";
 import type { OutboxItem } from "@/lib/shared/outbox";
 
@@ -783,17 +800,31 @@ describe("pillParts", () => {
 
 // -------------------------------------------------------------------- owed
 
-describe("owedLine", () => {
-  it("takes the top three above the threshold, in order", () => {
-    expect(owedLine(ranked)).toBe("Rear Delts · Traps · Forearms");
+/**
+ * These three were written against `owedLine`, which joined the top labels into
+ * a string for the old start screen. That card now lives in
+ * `features/lift/next.ts` and shows a figure per muscle, so `owedLine` has no
+ * caller and has been deleted — but the 0.2 cutoff it was exercising is
+ * `owedMuscles`', and `partitionByOwed` still depends on it to decide what goes
+ * under "Owed this week" in the picker. So the assertions move down one layer
+ * rather than leaving with the function they happened to be written against.
+ */
+describe("owedMuscles", () => {
+  it("keeps what is owed, highest debt first", () => {
+    expect(owedMuscles(ranked).map((m) => m.label)).toEqual([
+      "Rear Delts", "Traps", "Forearms",
+    ]);
   });
 
   it("excludes anything at or below the 0.2 cutoff", () => {
-    expect(owedLine(ranked, 10)).toBe("Rear Delts · Traps · Forearms");
+    // The whole ranked fixture goes in; only three come out, so the cutoff is
+    // doing the work rather than a slice.
+    expect(owedMuscles(ranked)).toHaveLength(3);
+    expect(owedMuscles(ranked).every((m) => m.score > 0.2)).toBe(true);
   });
 
   it("is empty when nothing is owed", () => {
-    expect(owedLine([{ ...ranked[4] }])).toBe("");
+    expect(owedMuscles([{ ...ranked[4] }])).toEqual([]);
   });
 });
 
@@ -853,5 +884,259 @@ describe("partitionByOwed", () => {
     const { owed, rest } = partitionByOwed(catalogue, ranked);
     const ids = new Set(rest.map((e) => e.id));
     expect(owed.some((e) => ids.has(e.id))).toBe(false);
+  });
+});
+
+// ------------------------------------------------------------ fixing a set
+
+/**
+ * The guard for the owner's second ask: *"should be able to click into a set
+ * below and edit smtg if you typed it in wrong"*.
+ *
+ * Three things here are load-bearing and none is obvious from reading the
+ * functions:
+ *
+ *  - the correction keeps the set's `loggedAt`, because the server derives
+ *    every rest gap in a session from the interval between consecutive ones;
+ *  - it omits `note` and `rawText` for a DELIVERED set and carries them for a
+ *    QUEUED one, because an undelivered original is dropped and is the only
+ *    place those two exist;
+ *  - the overlay prunes on the displayed precision, because storage is kg and
+ *    a pound figure does not survive the round trip bit-for-bit.
+ */
+
+function displaySet(over: Partial<DisplaySet> & { clientId: string }): DisplaySet {
+  return {
+    key: over.clientId,
+    id: null,
+    queued: true,
+    exerciseId: BENCH,
+    reps: 10,
+    weightLb: 155,
+    rpe: null,
+    toFailure: false,
+    isWarmup: false,
+    felt: null,
+    loggedAt: "2026-10-25T18:00:00.000Z",
+    ...over,
+  };
+}
+
+describe("the ceilings a correction is held to", () => {
+  it("matches the ones POST /api/sets actually enforces", () => {
+    // The whole reason these are duplicated rather than imported: pulling
+    // `SANITY` into the phone's bundle means pulling the entire deterministic
+    // parser in with it, for two numbers. This import is the price of the
+    // duplicate — it is relative and only runs in node, so the parser never
+    // reaches Metro, and the numbers cannot drift without this failing.
+    expect(EDIT_MAX_REPS).toBe(SANITY.maxReps);
+    expect(EDIT_MAX_WEIGHT_LB).toBe(SANITY.maxWeightLb);
+  });
+
+  it("refuses exactly what the server refuses, at the boundary", () => {
+    const base = { weightLb: 185, reps: 5, rpe: null, kind: "working" as const };
+
+    for (const reps of [1, 5, EDIT_MAX_REPS]) {
+      expect(editBlockedReason({ ...base, reps })).toBeNull();
+      expect(setWithinSanity(reps, base.weightLb)).toBe(true);
+    }
+    for (const reps of [0, -1, EDIT_MAX_REPS + 1]) {
+      expect(editBlockedReason({ ...base, reps })).not.toBeNull();
+      expect(setWithinSanity(reps, base.weightLb)).toBe(false);
+    }
+    for (const weightLb of [0, 185, EDIT_MAX_WEIGHT_LB]) {
+      expect(editBlockedReason({ ...base, weightLb })).toBeNull();
+    }
+    for (const weightLb of [-1, EDIT_MAX_WEIGHT_LB + 1]) {
+      expect(editBlockedReason({ ...base, weightLb })).not.toBeNull();
+    }
+  });
+
+  it("catches the owner's 165-rep typo before it is queued", () => {
+    // The `165,5` paste became a set of 165 reps at 165 lb. The parser drops it
+    // and the route rejects it; this is the third place it cannot get through,
+    // and the only one that tells the owner before a write is attempted.
+    expect(editBlockedReason({ weightLb: 165, reps: 165, rpe: null, kind: "working" }))
+      .toBe("165 reps isn’t a set.");
+  });
+
+  it("refuses a rep count that is not whole, and an RPE off the scale", () => {
+    expect(editBlockedReason({ weightLb: 185, reps: 5.5, rpe: null, kind: "working" }))
+      .toBe("A set needs at least one rep.");
+    expect(editBlockedReason({ weightLb: 185, reps: 5, rpe: 11, kind: "working" }))
+      .toBe("RPE 11 isn’t on the scale.");
+    expect(editBlockedReason({ weightLb: 185, reps: 5, rpe: 7.5, kind: "working" }))
+      .toBeNull();
+  });
+});
+
+describe("what the sheet opens with", () => {
+  it("shows exactly what the chip shows", () => {
+    const set = displaySet({ clientId: "c1", weightLb: 155, reps: 10, rpe: 7, isWarmup: true });
+    expect(editFromSet(set)).toEqual({ weightLb: 155, reps: 10, rpe: 7, kind: "warmup" });
+  });
+
+  it("reads the impossible both-flags state as failure", () => {
+    const set = displaySet({ clientId: "c1", isWarmup: true, toFailure: true });
+    expect(editFromSet(set).kind).toBe("failure");
+  });
+
+  it("is not dirty before anything is touched", () => {
+    const set = displaySet({ clientId: "c1", rpe: 8, toFailure: true });
+    expect(editChanged(set, editFromSet(set))).toBe(false);
+  });
+
+  it("is dirty on each of the four things it can change", () => {
+    const set = displaySet({ clientId: "c1", weightLb: 155, reps: 10, rpe: null });
+    const base = editFromSet(set);
+    expect(editChanged(set, { ...base, weightLb: 165 })).toBe(true);
+    expect(editChanged(set, { ...base, reps: 9 })).toBe(true);
+    expect(editChanged(set, { ...base, rpe: 8 })).toBe(true);
+    expect(editChanged(set, { ...base, kind: "warmup" })).toBe(true);
+  });
+
+  it("ignores a weight difference nobody can see", () => {
+    // 20 kg is 44.0924… lb and comes back from the server as whatever
+    // `kgToLb(lbToKg(x))` produces. Both render as `44.1`, so treating them as
+    // a change would leave the correction looking permanently undelivered.
+    const set = displaySet({ clientId: "c1", weightLb: 44.09245243697551 });
+    expect(editChanged(set, { ...editFromSet(set), weightLb: 44.0924 })).toBe(false);
+    // One display step apart IS a change.
+    expect(editChanged(set, { ...editFromSet(set), weightLb: 44.2 })).toBe(true);
+  });
+});
+
+describe("the write a correction makes", () => {
+  const set = displaySet({
+    clientId: "c1",
+    id: "row-1",
+    queued: false,
+    weightLb: 155,
+    reps: 10,
+    felt: "strong",
+    loggedAt: "2026-10-25T18:04:00.000Z",
+  });
+  const edit = { weightLb: 165, reps: 10, rpe: 8, kind: "failure" as const };
+
+  it("lands on the row it is correcting, at the time it was logged", () => {
+    const payload = editSetPayload(set, edit, null);
+    // Same clientId is the entire mechanism: the route upserts on
+    // `(workout_id, client_id)`, so this is an UPDATE and not a second set.
+    expect(payload.clientId).toBe("c1");
+    // Re-stamping this would record the gap since the ORIGINAL set as the rest
+    // before it, putting every later set's rest in the wrong place.
+    expect(payload.loggedAt).toBe("2026-10-25T18:04:00.000Z");
+    expect(payload.exerciseId).toBe(BENCH);
+  });
+
+  it("carries the corrected figures and both kind flags", () => {
+    const payload = editSetPayload(set, edit, null);
+    expect(payload.weightLb).toBe(165);
+    expect(payload.reps).toBe(10);
+    expect(payload.rpe).toBe(8);
+    // BOTH, always. A patch that set only the flag being turned on is how the
+    // card ended up able to show WARMUP and TO FAILURE at the same time.
+    expect(payload.toFailure).toBe(true);
+    expect(payload.isWarmup).toBe(false);
+    expect(payload.felt).toBe("strong");
+  });
+
+  it("omits the note and the raw text for a set the server already has", () => {
+    // Not an oversight: the row exists, this is an update of it, and the phone
+    // does not know what the note says. `POST /api/sets` leaves a field the
+    // body omits exactly as it was, so a fix to the weight cannot wipe the
+    // sentence the owner dictated. `JSON.stringify` drops undefined, so an
+    // absent key really is absent on the wire.
+    const payload = editSetPayload(set, edit, null);
+    expect("note" in payload).toBe(false);
+    expect("rawText" in payload).toBe(false);
+    expect(JSON.parse(JSON.stringify(payload))).not.toHaveProperty("note");
+  });
+
+  it("carries them forward for a set that is still queued", () => {
+    // Here the original write is DROPPED, so this payload is the only one the
+    // row will ever be built from. Omitting these would store an empty note
+    // and lose what was spoken — silently, and only for sets corrected in a
+    // basement.
+    const queuedPayload = {
+      clientId: "c1",
+      exerciseId: BENCH,
+      reps: 10,
+      weightLb: 155,
+      note: "left shoulder pinched",
+      rawText: "chest supported row 155 for 10",
+    };
+    const payload = editSetPayload(set, edit, queuedPayload);
+    expect(payload.note).toBe("left shoulder pinched");
+    expect(payload.rawText).toBe("chest supported row 155 for 10");
+    // The figures are still the corrected ones, not the queued ones.
+    expect(payload.weightLb).toBe(165);
+  });
+
+  it("does not invent a note from a payload that has none", () => {
+    const payload = editSetPayload(set, edit, { clientId: "c1", exerciseId: BENCH });
+    expect("note" in payload).toBe(false);
+  });
+});
+
+describe("the correction overlay", () => {
+  const a = displaySet({ clientId: "a", id: "row-a", queued: false, weightLb: 155, reps: 10 });
+  const b = displaySet({ clientId: "b", id: "row-b", queued: false, weightLb: 185, reps: 5 });
+
+  it("paints a pending correction over the merged list", () => {
+    // This is the only thing standing between a save and a chip that still
+    // reads 155 until the queue drains and the session is refetched.
+    const edits: SetEdits = { a: { weightLb: 165, reps: 9, rpe: 8, kind: "failure" } };
+    const [first, second] = applyEdits([a, b], edits);
+
+    expect(first.weightLb).toBe(165);
+    expect(first.reps).toBe(9);
+    expect(first.rpe).toBe(8);
+    expect(first.toFailure).toBe(true);
+    expect(first.isWarmup).toBe(false);
+    // Untouched, and the same object — nothing else on the screen re-renders.
+    expect(second).toBe(b);
+  });
+
+  it("leaves the list alone when there is nothing pending", () => {
+    const sets = [a, b];
+    expect(applyEdits(sets, {})).toBe(sets);
+  });
+
+  it("drops a correction the moment the truth agrees with it", () => {
+    const delivered = displaySet({ clientId: "a", id: "row-a", queued: false, weightLb: 165, reps: 9, rpe: 8, toFailure: true });
+    const edits: SetEdits = { a: { weightLb: 165, reps: 9, rpe: 8, kind: "failure" } };
+    expect(pruneEdits(edits, [delivered, b])).toEqual({});
+  });
+
+  it("drops a correction for a set that has been removed", () => {
+    const edits: SetEdits = { a: { weightLb: 165, reps: 9, rpe: null, kind: "working" } };
+    expect(pruneEdits(edits, [b])).toEqual({});
+  });
+
+  it("holds a correction the server has not caught up with", () => {
+    // The in-flight case, which is most of the time this exists for.
+    const edits: SetEdits = { a: { weightLb: 165, reps: 10, rpe: null, kind: "working" } };
+    expect(pruneEdits(edits, [a, b])).toEqual(edits);
+  });
+
+  it("returns the same object when nothing was pruned", () => {
+    // The screen prunes inside an effect that depends on the merged list, so a
+    // new object every time would be a render loop.
+    const edits: SetEdits = { a: { weightLb: 165, reps: 10, rpe: null, kind: "working" } };
+    expect(pruneEdits(edits, [a, b])).toBe(edits);
+    expect(pruneEdits({}, [a, b])).toEqual({});
+  });
+
+  it("never pins a lost correction on screen forever", () => {
+    // `pruneEdits` drops on evidence and never on a timer, so a write the
+    // outbox gives up on ends with the chip back on the figures the server
+    // actually holds — the set vanishes from the queue, the refetch brings the
+    // old row, and the entry stays only while a correction is genuinely in
+    // flight. The one thing it must not do is drop an entry whose set still
+    // disagrees, which is the assertion above; the one thing it must do is
+    // drop it as soon as the row is gone, which is this.
+    const edits: SetEdits = { a: { weightLb: 165, reps: 10, rpe: null, kind: "working" } };
+    expect(pruneEdits(edits, [])).toEqual({});
   });
 });

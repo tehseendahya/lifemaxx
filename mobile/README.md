@@ -111,7 +111,7 @@ SIGNED IN` there means the server is reachable and answering correctly.
 | `npm start` | the dev server and QR code |
 | `npm run ios` / `android` / `web` | start on a given target |
 | `npm run typecheck` | `tsc --noEmit` (needs the root `npm install` first) |
-| `npm test` | vitest — 320 tests, pure logic only |
+| `npm test` | vitest — 613 tests, pure logic only |
 | `npm run bundle` | `expo export --platform ios` — the real build gate |
 
 There is a diagnostic route at **`/shared-smoke`**, not linked from any screen.

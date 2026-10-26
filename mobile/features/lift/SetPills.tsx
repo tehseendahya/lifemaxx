@@ -15,11 +15,20 @@ const styles = StyleSheet.create({
 /**
  * Today's sets for the exercise on screen.
  *
- * Read-only, and deliberately so: the card above is where sets are made, and a
- * row of editable chips under it would turn a glance into a decision. The one
- * thing a pill can do is be removed, and that is a long-press into a sheet
- * rather than a swipe or an x — a 28pt delete target next to the thumb that
- * presses LOG seventy times a session is how a set gets deleted by accident.
+ * ── A TAP OPENS THE FIX SHEET ──────────────────────────────────────────────
+ *
+ * This was read-only, deliberately: the card above is where sets are made, and
+ * the only thing a chip could do was be removed — on a LONG press, so that a
+ * thumb pressing the 72pt LOG button seventy times a session could not destroy
+ * a set by brushing a 28pt chip.
+ *
+ * The owner asked for the obvious missing half of that: *"should be able to
+ * click into a set below and edit smtg if you typed it in wrong"*. So a plain
+ * tap now opens `EditSetSheet`, which writes nothing until SAVE and carries the
+ * REMOVE button that used to be the whole interaction. A press that costs a
+ * dismissal needs no gesture to protect it, and a hidden gesture is no good to
+ * someone who does not know it is there — the chips never said they could be
+ * long-pressed.
  *
  * A dashed, 70%-opacity pill means the set is on this phone and not yet on the
  * server. Same treatment as the web app, and deliberately quiet: being in a
@@ -27,10 +36,10 @@ const styles = StyleSheet.create({
  */
 export function SetPills({
   sets,
-  onLongPressSet,
+  onPressSet,
 }: {
   sets: DisplaySet[];
-  onLongPressSet: (set: DisplaySet) => void;
+  onPressSet: (set: DisplaySet) => void;
 }) {
   return (
     <View>
@@ -44,14 +53,13 @@ export function SetPills({
             return (
               <Pressable
                 key={set.key}
-                onLongPress={() => {
+                onPress={() => {
                   tapSelect();
-                  onLongPressSet(set);
+                  onPressSet(set);
                 }}
-                delayLongPress={350}
                 accessibilityRole="button"
-                accessibilityLabel={`${parts.main}${parts.rpe ?? ""}, long press to remove`}
-                accessibilityHint="Long press to remove this set"
+                accessibilityLabel={`${parts.main}${parts.rpe ?? ""}`}
+                accessibilityHint="Opens this set to be fixed or removed"
                 style={({ pressed }) => (pressed ? styles.pressed : undefined)}
               >
                 <Pill variant={set.isWarmup ? "warmup" : set.queued ? "queued" : "default"}>

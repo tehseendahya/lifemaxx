@@ -55,6 +55,15 @@ const styles = StyleSheet.create({
   warn: { color: color.warn },
 
   state: { color: color.muted, fontSize: 13, lineHeight: 19, paddingTop: space.lg },
+
+  /**
+   * The owner's own words, at body size and in full ink — the only thing on
+   * this page that is not a figure. `lineHeight` is generous because a cue is
+   * often two short lines ("elbows tucked" / "pause on chest") and the line
+   * breaks they typed are preserved all the way from the database.
+   */
+  cue: { color: color.ink, fontSize: 15, lineHeight: 22, marginTop: space.xs },
+  cueFoot: { color: color.muted, fontSize: 11, lineHeight: 16, marginTop: space.sm },
 });
 
 /**
@@ -109,6 +118,30 @@ export default function ExerciseScreen() {
       refreshing={isRefetching}
       onRefresh={() => void refetch()}
     >
+      {/*
+        The cue, above everything, because it is the only thing on this page the
+        owner wrote rather than the app worked out — and the one they came to
+        re-read before the next set.
+
+        Read-only here on purpose. The cue is edited in the confirm sheet, which
+        is where you are every time this lift is logged, and this page edits
+        nothing else: there is no set editing, no rename, no delete. Putting the
+        app's one inline editor on an otherwise read-only reference screen would
+        mean a second copy of the write path — a second cache patch, a second
+        outbox fallback — and two editors for one field is how the two come to
+        disagree. The footnote says where it is changed instead of pretending
+        there is nothing to change.
+      */}
+      {view.cue !== null && (
+        <Card style={styles.card}>
+          <Label>Your cue</Label>
+          <Text style={styles.cue}>{view.cue}</Text>
+          <Text style={styles.cueFoot}>
+            Shown every time you log this lift. Edit it in the confirm sheet when you log a set.
+          </Text>
+        </Card>
+      )}
+
       {view.trend.length > 0 && view.peakE1rmLb !== null && (
         <Card style={styles.card}>
           <View style={styles.statRow}>

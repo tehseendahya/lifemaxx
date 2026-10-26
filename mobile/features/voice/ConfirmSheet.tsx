@@ -11,10 +11,14 @@ import {
   blockedReason,
   canConfirm,
   confirmLabel,
+  cueFor,
   groupRows,
+  parseHint,
+  sourceDoorLabel,
   type LogRow,
   type PadField,
   type RowPatch,
+  type SourceKind,
 } from "./model";
 
 const styles = StyleSheet.create({
@@ -78,19 +82,38 @@ const styles = StyleSheet.create({
  * The source text sits at the top, verbatim, and is tappable to re-parse. That
  * is the escape hatch for a sentence read wrong, and it is why the text is
  * never discarded: the user can always get back to what they actually wrote.
+ *
+ * ── THE CUE RIDES ALONG, AND IS NOT PART OF THE CONFIRMATION ───────────────
+ *
+ * Each group header shows the carry-forward cue pinned to that lift and can
+ * edit it. That write goes straight to `POST /api/mobile/exercise/cue` the
+ * moment it is saved — it is NOT gated on the confirm button and is NOT undone
+ * by DISCARD. A cue is a fact about the exercise, not about these sets: an
+ * owner who opens this sheet, writes "elbows tucked", then decides the parse
+ * was wrong and discards it has still written that cue on purpose, and taking
+ * it back because of an unrelated decision would be the app overruling them.
+ * The only thing this sheet gates is sets.
+ *
+ * There is one case where a cue does go away and it is correct that it does:
+ * a cue pinned to an exercise this parse CREATED. DISCARD hands that exercise
+ * back (`dropCreated`), and `exercise_cues` cascades on the exercise, so the
+ * cue leaves with the lift it described. A cue pinned to a lift that no longer
+ * exists would have nowhere to appear.
  */
 export function ConfirmSheet({
   visible,
   rows,
   sourceText,
-  sourceLabel,
+  sourceKind,
   usedModel,
+  cues,
   queueing,
   error,
   onEditSource,
   onOpenPad,
   onPatch,
   onOpenNote,
+  onEditCue,
   onDuplicate,
   onDelete,
   onPickExercise,
@@ -104,9 +127,15 @@ export function ConfirmSheet({
   rows: LogRow[];
   /** What the user typed or what came back from transcription. Shown verbatim. */
   sourceText: string;
-  /** `TYPED` or `HEARD` — which door this came in through. */
-  sourceLabel: string;
+  /** Which door this came in through. Drives the label and the provenance hint. */
+  sourceKind: SourceKind;
   usedModel: boolean;
+  /**
+   * Every carry-forward cue this user has, keyed by exercise id, straight off
+   * `bootstrap.cues`. Optional, because a server that predates the field sends
+   * nothing and that has to draw as no cues rather than as a crash.
+   */
+  cues: Record<string, string> | undefined;
   /** True while the rows are being written to the outbox. */
   queueing: boolean;
   error: string | null;
@@ -114,6 +143,8 @@ export function ConfirmSheet({
   onOpenPad: (key: string, field: PadField) => void;
   onPatch: (key: string, patch: RowPatch) => void;
   onOpenNote: (key: string) => void;
+  /** Open the cue editor for one lift. Pinned to the exercise, not to a set. */
+  onEditCue: (exerciseId: string, exerciseName: string) => void;
   onDuplicate: (key: string) => void;
   onDelete: (key: string) => void;
   onPickExercise: (entryKey: string, query: string) => void;
@@ -150,7 +181,7 @@ export function ConfirmSheet({
         accessibilityLabel="Edit what was read and parse it again"
         style={({ pressed }) => [styles.source, pressed && styles.sourcePressed]}
       >
-        <Text style={styles.sourceLabel}>{`${sourceLabel} · TAP TO FIX`}</Text>
+        <Text style={styles.sourceLabel}>{sourceDoorLabel(sourceKind)}</Text>
         {/*
           Two lines, not all five. The paste is evidence, not the content of the
           sheet — the groups below are what the user is checking, and a
@@ -159,9 +190,12 @@ export function ConfirmSheet({
         <Text style={styles.sourceText} numberOfLines={2}>
           {sourceText}
         </Text>
-        <Text style={styles.sourceHint}>
-          {usedModel ? "READ BY THE MODEL" : "READ WITHOUT THE NETWORK"}
-        </Text>
+        {/*
+          What read this, at the granularity the server actually reports it.
+          The two strings this replaces both over-claimed — see `parseHint` in
+          `model.ts`, which holds the measurement and the reasoning.
+        */}
+        <Text style={styles.sourceHint}>{parseHint(sourceKind, usedModel)}</Text>
       </Pressable>
 
       {error !== null && <Text style={styles.error}>{error}</Text>}
@@ -185,6 +219,8 @@ export function ConfirmSheet({
             <View key={group.entryKey} style={[styles.group, GROUP_BORDER[group.match]]}>
               <GroupHeader
                 group={group}
+                cue={cueFor(group.exerciseId, cues)}
+                onEditCue={onEditCue}
                 onPickExercise={onPickExercise}
                 onUseNearMiss={onUseNearMiss}
                 onBulk={onBulk}

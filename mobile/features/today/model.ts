@@ -10,7 +10,14 @@ import { averagePaceSecPerMile, miles, weekStartOf, weeklyRunStats } from "../..
 import { weightTrend } from "../../lib/shared/tdee";
 import { kgToLb } from "../../lib/shared/units";
 import type { Bootstrap, HistoryDay } from "../../lib/types";
-import { extractGoalClaims, type GoalClaim } from "./goals";
+/*
+ * `fmtWeight` comes from `features/voice/model.ts`, which is the other pure,
+ * `react-native`-free module in this app and already owns the one definition of
+ * "whole pounds, always". A second local copy is how a `227.5` comes to render
+ * as `228` on the confirm sheet and `227.5` on a goal row.
+ */
+import { fmtWeight } from "../voice/model";
+import { extractGoalClaims, restKind, type GoalClaim } from "./goals";
 
 /**
  * `bootstrap` → the Today dashboard, as plain data.
@@ -142,13 +149,6 @@ export const signed = (n: number, digits = 0): string =>
   `${n > 0 ? "+" : n < 0 ? "−" : ""}${Math.abs(n).toFixed(digits)}`;
 
 const round1 = (n: number): number => Math.round(n * 10) / 10;
-
-export function median(values: number[]): number {
-  if (values.length === 0) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-}
 
 // ------------------------------------------------------------------ windows
 
@@ -407,19 +407,36 @@ export interface GoalGap {
   tone: "good" | "ink" | "muted";
 }
 
-export interface GoalRow {
+export interface TargetRow {
   key: string;
+  /** The one derived string on the row: "Barbell Bench Press → 205 lb". */
+  headline: string;
   /** The owner's own sentence, verbatim. Never rewritten. */
   sentence: string;
   gap: GoalGap;
-  /** "6w" and whether it is tight. Null when the sentence names no month. */
+  /** "5 weeks left" and whether it is tight. Null when no month was named. */
   deadline: { label: string; tone: "warn" | "muted" } | null;
+  /** Rate needed against rate achieved. Null until there is a rate to compute. */
+  pace: { text: string; tone: "warn" | "muted" } | null;
 }
 
+/**
+ * The three kinds of thing in one free-text goals box, kept apart.
+ *
+ * `targets` are the sentences carrying a number this app can measure.
+ * `aims` are the ones that do not and were never going to — "work on arm size"
+ * has no honest bar pattern, and inventing one would be the app fabricating a
+ * measurement. `context` is standing background the coach reads: the owner's
+ * split and their weekly schedule, visibly read and visibly NOT turned into a
+ * schema. There is no split entity in this app and this block does not
+ * introduce one; all three fields below are strings.
+ */
 export interface GoalsBlock {
-  rows: GoalRow[];
-  /** Sentences nothing matched. Shown verbatim under their own label. */
-  rest: string[];
+  targets: TargetRow[];
+  /** Qualitative goals, verbatim. No figure, no bar, no tone. */
+  aims: string[];
+  /** Split, schedule, gym — verbatim. Prose the coach reads. */
+  context: string[];
   /** Set when there is prose but no measurable target in it. */
   note: string | null;
   /** Set when `goalsText` is blank. */
@@ -428,6 +445,15 @@ export interface GoalsBlock {
 
 /** Weeks left before a deadline is tight enough to colour. */
 const DEADLINE_WARN_WEEKS = 4;
+/**
+ * What a pace line needs before it is a rate rather than a coincidence.
+ *
+ * Two points a week apart is one session's noise expressed as lb/wk; on the
+ * owner's bench that would read as ±30 lb/wk from a single good day. Fourteen
+ * days is the floor at which the figure stops being an artefact of when they
+ * happened to log.
+ */
+export const MIN_PACE_SPAN_DAYS = 14;
 
 /**
  * The gap between a claim and the measurement.
@@ -469,10 +495,43 @@ export function gapFor(claim: GoalClaim, b: Bootstrap): GoalGap {
       const now = bestE1rmLbFor(claim.exerciseId, b);
       if (now === null) return { text: "never logged", tone: "muted" };
 
-      const delta = claim.targetLb - now;
+      /*
+       * The delta is taken from the ROUNDED e1RM, not the raw one. Epley on a
+       * 175×3 gives 192.5, which displays as 193 and used to produce
+       * "e1RM 193 → 205 · +13 lb" — three numbers on one line that do not add
+       * up. The figure the owner can see is the figure the arithmetic uses.
+       */
+      const shown = Math.round(now);
+      const delta = claim.targetLb - shown;
       return {
-        text: `e1RM ${Math.round(now)} → ${claim.targetLb} · ${signed(delta)} lb`,
+        text: `e1RM ${shown} → ${claim.targetLb} · ${signed(delta)} lb`,
         tone: delta <= 0 ? "good" : "ink",
+      };
+    }
+
+    /*
+     * A fact beside a target, never a computed gap.
+     *
+     * Nothing in `bootstrap` answers "most reps at ≥45 lb": `lastSets[id]`
+     * carries the session's modal set and `history.mainLifts` carries e1RM
+     * points. Both would have to be guessed at to produce a rep gap, and a
+     * guessed rep count against a goal the owner set is the one number on this
+     * card they would act on. So this prints what is on record and what they
+     * asked for, side by side, and lets them do the subtraction.
+     */
+    case "lift_reps": {
+      const last = b.lastSets[claim.exerciseId];
+      if (last === undefined) return { text: "never logged", tone: "muted" };
+
+      const target = claim.loadLb === null
+        ? `${claim.targetReps} reps`
+        : `${claim.targetReps} × ${claim.loadLb} lb`;
+      const met = last.reps >= claim.targetReps
+        && (claim.loadLb === null || last.weightLb >= claim.loadLb);
+
+      return {
+        text: `last session ${fmtWeight(last.weightLb)} × ${last.reps} · target ${target}`,
+        tone: met ? "good" : "ink",
       };
     }
 
@@ -531,32 +590,46 @@ export function bestE1rmLbFor(exerciseId: string, b: Bootstrap): number | null {
   return candidates.length > 0 ? Math.max(...candidates) : null;
 }
 
+/**
+ * The goals box, split three ways.
+ *
+ * The free text stays the single source of truth and the coach still reads the
+ * whole string — this only renders it. The owner writes plain English and the
+ * measurable sentences get tracked automatically; nothing here writes a second
+ * copy of a goal anywhere, and there is no structured goal entity to drift out
+ * of sync with the prose.
+ */
 export function goalsBlock(b: Bootstrap): GoalsBlock {
   if (b.goalsText.trim() === "") {
     return {
-      rows: [],
-      rest: [],
+      targets: [],
+      aims: [],
+      context: [],
       note: null,
-      empty: "Nothing written down yet. What you're actually training for goes on the You screen.",
+      empty: "Nothing written down yet. Write it however you like. A number and a month — "
+        + "\"bench 205 by December\" — and it gets tracked automatically.",
     };
   }
 
   const { claims, rest } = extractGoalClaims(b.goalsText, b.catalogue, b.today);
 
-  const rows = claims.map((claim, i) => {
+  const targets = claims.map((claim, i) => {
     const gap = gapFor(claim, b);
     return {
       key: `${claim.kind}-${i}`,
+      headline: headlineFor(claim),
       sentence: claim.sentence,
       gap,
       deadline: deadlineFor(claim.byDate, b.today, gap.tone === "good"),
+      pace: paceFor(claim, b),
     };
   });
 
   return {
-    rows,
-    rest,
-    note: rows.length === 0
+    targets,
+    aims: rest.filter((s) => restKind(s) === "aim"),
+    context: rest.filter((s) => restKind(s) === "context"),
+    note: targets.length === 0
       ? "No measurable target in this yet. A number and a month — \"bench 225 by March\" — "
         + "and this card tracks it."
       : null,
@@ -564,6 +637,39 @@ export function goalsBlock(b: Bootstrap): GoalsBlock {
   };
 }
 
+/**
+ * The row's one derived string.
+ *
+ * Derived, and therefore the only line on the row that is not the owner's own
+ * words — which is why their sentence is printed underneath it. A headline that
+ * reworded a goal, with nothing beside it to check against, is how the app
+ * would come to be trusted about a target it had quietly mis-read.
+ */
+export function headlineFor(claim: GoalClaim): string {
+  switch (claim.kind) {
+    case "bodyweight":
+      return `Bodyweight → ${claim.targetLb} lb`;
+    case "lift":
+      return `${claim.exerciseName} → ${claim.targetLb} lb`;
+    case "lift_reps":
+      return claim.loadLb === null
+        ? `${claim.exerciseName} → ${claim.targetReps} reps`
+        : `${claim.exerciseName} → ${claim.targetReps} × ${claim.loadLb} lb`;
+    case "run_distance":
+      return `Run ${claim.distanceMi.toFixed(1)} mi`;
+    case "run_time":
+      return `${claim.distanceMi.toFixed(1)} mi in ${formatDuration(claim.targetSec)}`;
+  }
+}
+
+/**
+ * The countdown, which is the primary pressure mark on a target row.
+ *
+ * A countdown rather than a progress bar, because every one of the owner's
+ * goals carries a date and a percentage needs a baseline that one logged
+ * session cannot supply. "5 weeks left" rather than "5w": this is the figure
+ * the row is read for, and a two-character mono token is a label, not a figure.
+ */
 function deadlineFor(
   byDate: string | null,
   today: string,
@@ -571,10 +677,77 @@ function deadlineFor(
 ): { label: string; tone: "warn" | "muted" } | null {
   if (byDate === null) return null;
   const weeks = Math.max(0, Math.floor((dayNumber(byDate) - dayNumber(today)) / 7));
+  const label = weeks === 0 ? "this week" : weeks === 1 ? "1 week left" : `${weeks} weeks left`;
   return {
-    label: `${weeks}w`,
+    label,
     tone: weeks < DEADLINE_WARN_WEEKS && !met ? "warn" : "muted",
   };
+}
+
+/**
+ * Rate needed against rate achieved — the line that turns a target list into a
+ * tracker, and the one thing on this card that appears only with more data.
+ *
+ * Withheld for the two kinds that have no honest rate: a `lift_reps` target has
+ * no measurement at all (see `gapFor`), and a run target's rate would be pace
+ * over distance, which is two units in one figure. Withheld without a deadline,
+ * because a rate with no horizon is not a pace. Withheld below
+ * `MIN_PACE_SPAN_DAYS`, which with the owner's single logged session means no
+ * pace line anywhere on the card today — correctly: one point has no rate.
+ */
+export function paceFor(
+  claim: GoalClaim,
+  b: Bootstrap,
+): { text: string; tone: "warn" | "muted" } | null {
+  if (claim.kind !== "lift" && claim.kind !== "bodyweight") return null;
+  if (claim.byDate === null) return null;
+
+  const weeksLeft = (dayNumber(claim.byDate) - dayNumber(b.today)) / 7;
+  // A deadline that has passed has no "per week left" to divide by.
+  if (weeksLeft <= 0) return null;
+
+  const series = claim.kind === "lift" ? liftSeriesFor(claim.exerciseId, b) : weighInSeries(b);
+  if (series.length < 2) return null;
+
+  const first = series[0];
+  const last = series[series.length - 1];
+  const spanDays = dayNumber(last.date) - dayNumber(first.date);
+  if (spanDays < MIN_PACE_SPAN_DAYS) return null;
+
+  const now = claim.kind === "lift"
+    ? bestE1rmLbFor(claim.exerciseId, b)
+    : currentWeightLb(b);
+  if (now === null) return null;
+
+  const delta = claim.targetLb - now;
+  const required = delta / weeksLeft;
+  const actual = (last.value - first.value) / (spanDays / 7);
+
+  /*
+   * Compared in the direction of the goal rather than as `actual < required`.
+   * On a cut both figures are negative and the naive comparison inverts: losing
+   * 1.5 lb/wk against a required 1.0 would be flagged as behind. The sign of
+   * `delta` is the only thing that says which way is forward.
+   */
+  const onPace = delta === 0 || (delta > 0 ? actual >= required : actual <= required);
+
+  return {
+    text: `needs ${required.toFixed(1)} lb/wk · doing ${actual.toFixed(1)} lb/wk`,
+    tone: onPace ? "muted" : "warn",
+  };
+}
+
+/** One lift's e1RM points as `{ date, value }`, ascending. */
+function liftSeriesFor(exerciseId: string, b: Bootstrap): { date: string; value: number }[] {
+  const series = b.history.mainLifts.find((l) => l.exerciseId === exerciseId);
+  return series ? series.points.map((p) => ({ date: p.date, value: p.e1rmLb })) : [];
+}
+
+/** Every weigh-in in the 56-day history, ascending. */
+function weighInSeries(b: Bootstrap): { date: string; value: number }[] {
+  return b.history.days
+    .filter((d) => d.weightLb !== null)
+    .map((d) => ({ date: d.date, value: d.weightLb as number }));
 }
 
 // --------------------------------------------------------- block 4: strength
@@ -615,35 +788,30 @@ export function strengthRows(b: Bootstrap): StrengthRow[] {
 // ------------------------------------------------------------- block 5: load
 
 export interface LoadBlock {
-  /** Whole working sets per ISO week, ascending, oldest first. */
-  hardSets: number[];
-  /** Miles per ISO week over the same buckets. */
+  /** Miles per ISO week, ascending, oldest first. */
   runMiles: number[];
-  median: number;
-  /**
-   * Null when the median is zero. A dashed reference line sitting on the
-   * baseline says nothing and overlaps the zero-week ticks — an account three
-   * weeks old has a median of 0 and does not need to be told.
-   */
-  medianLabel: string | null;
   /** The current, incomplete week. Drawn at 70% so it cannot read as complete. */
   partialIndex: number;
   weekStarts: string[];
   xLabels: { left: string; right: string };
-  /** Nothing in eight weeks: one line, no chart. */
+  /** No mileage in eight weeks: one line, no chart. */
   empty: boolean;
 }
 
 /**
- * Eight Monday-start weeks of lifting load and run mileage.
+ * Eight Monday-start weeks of run mileage.
  *
- * `hardSets` is whole working sets per day, summed — NOT the muscle-weighted
- * fractions `hardSetsByMuscle()` produces, which are larger because one bench
- * set counts 1.0 to chest and 0.5 to triceps. Those two numbers differ and the
- * card's label says which this is.
+ * This used to carry `hardSets` too — eight weekly buckets of whole working
+ * sets, muscle-blind — and the owner's complaint about it was exact: "I don't
+ * get this weekly hard sets thing. What's the y axis." The series is gone and
+ * is not re-homed anywhere, because a weekly total that ignores *which* muscle
+ * answers no question they have, while the ranking the rest of the app runs on
+ * is entirely per-muscle. `volume.ts` draws that week instead, in the shape the
+ * ranking already uses.
  *
- * Run miles get their own panel rather than a second axis on the first one.
- * Same rule as the trajectory card: a second measure is a second panel.
+ * What is left is one measure in one unit, which is the only reason the card
+ * can be read at all. Same rule as the trajectory card, now applied one level
+ * up: a second measure is a second *card*, not a second panel inside this one.
  */
 export function loadBlock(b: Bootstrap): LoadBlock {
   const currentWeek = weekStartOf(b.today);
@@ -652,26 +820,14 @@ export function loadBlock(b: Bootstrap): LoadBlock {
     (_, i) => shiftIso(currentWeek, -7 * (LOAD_WEEKS - 1 - i)),
   );
 
-  const perWeek = new Map<string, number>();
-  for (const day of b.history.days) {
-    if (day.hardSets <= 0) continue;
-    const start = weekStartOf(day.date);
-    perWeek.set(start, (perWeek.get(start) ?? 0) + day.hardSets);
-  }
-
-  const hardSets = weekStarts.map((w) => perWeek.get(w) ?? 0);
   const runMiles = weekStarts.map((w) => weeklyRunStats(b.runs, w).distanceMi);
-  const med = median(hardSets);
 
   return {
-    hardSets,
     runMiles,
-    median: med,
-    medianLabel: med > 0 ? `MED ${Math.round(med)}` : null,
     partialIndex: LOAD_WEEKS - 1,
     weekStarts,
     xLabels: { left: formatShortDate(weekStarts[0]), right: "THIS WK" },
-    empty: hardSets.every((n) => n === 0) && runMiles.every((n) => n === 0),
+    empty: runMiles.every((n) => n === 0),
   };
 }
 

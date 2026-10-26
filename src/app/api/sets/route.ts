@@ -3,7 +3,7 @@ import { db } from "@/db";
 import { sets, workouts } from "@/db/schema";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { lbToKg } from "@/lib/domain/units";
-import { getActiveWorkout } from "@/lib/queries";
+import { getActiveWorkout, workoutForSetAt } from "@/lib/queries";
 import { SANITY, setWithinSanity } from "@/lib/llm/shorthand";
 
 interface Body {
@@ -47,12 +47,33 @@ export const POST = route<Body>(async ({ userId, body }) => {
     );
   }
 
-  const active = await getActiveWorkout(userId);
-  if (!active) throw new Error("Start a session first.");
+  /*
+   * The phone stamps this. A set logged at 6:12pm in a basement and delivered
+   * at 7:04pm in the car park happened at 6:12 — using arrival time would put
+   * the whole session's timeline, and every rest gap in it, in the wrong place.
+   *
+   * It is also what picks the session, which is why it is read BEFORE the
+   * lookup rather than after it. Sessions have a lifetime now, so "the active
+   * session" and "the session this set was logged in" are no longer the same
+   * thing for a delivery that waited in a pocket all afternoon; see
+   * `workoutForSetAt`.
+   */
+  const claimedAt = claimedLoggedAt(body.loggedAt);
 
-  // The phone stamps this. A set logged at 6:12pm in a basement and delivered
-  // at 7:04pm in the car park happened at 6:12 — using arrival time would put
-  // the whole session's timeline, and every rest gap in it, in the wrong place.
+  const active = await workoutForSetAt(userId, claimedAt);
+  /*
+   * 400 rather than a bare `throw`, which `route()` reports as a 500.
+   *
+   * The difference is entirely about the outbox. `classifyStatus` retries a
+   * 5xx and drops a 4xx, and the queue delivers strictly in order and STOPS at
+   * the first failure — so one set with nowhere to go used to wedge every set
+   * queued behind it through eight rounds of backoff before giving up. This is
+   * not a server fault and retrying cannot fix it: the session it belonged to
+   * does not exist. Failing it immediately keeps the rest of the session
+   * moving and surfaces it as "a set didn't save", with the reason.
+   */
+  if (!active) throw new HttpError("Start a session first.");
+
   const loggedAt = parseLoggedAt(body.loggedAt, active.startedAt);
 
   const prior = await db.select({ loggedAt: sets.loggedAt, setIndex: sets.setIndex })
@@ -83,6 +104,35 @@ export const POST = route<Body>(async ({ userId, body }) => {
     loggedAt,
   };
 
+  /*
+   * What a second write of the same set is allowed to change.
+   *
+   * `reps` and `weightLb` are required on the body, so they are always written.
+   * EVERYTHING ELSE is written only when the body actually provides it, and
+   * left exactly as it was when the body omits it.
+   *
+   * That rule is for the phone's fix-a-set sheet. There is no PATCH route — a
+   * correction is a re-POST of the same `clientId`, which is what lets it go
+   * through the outbox and therefore work in a basement. But the phone's
+   * session payload carries the figures a chip draws and NOT the set note or
+   * the raw text of what was dictated, so a correction built from what the
+   * phone knows would have sent `note: ""` and wiped a sentence the owner
+   * typed. Omitting a field is now how a caller says "leave this alone".
+   *
+   * It changes nothing for a retry, which re-sends the identical payload it was
+   * minted with, and nothing for the web logger, which sends every field.
+   */
+  const correction = {
+    reps: values.reps,
+    weightKg: values.weightKg,
+    ...(body.rpe !== undefined ? { rpe: values.rpe } : {}),
+    ...(body.toFailure !== undefined ? { toFailure: values.toFailure } : {}),
+    ...(body.isWarmup !== undefined ? { isWarmup: values.isWarmup } : {}),
+    ...(body.felt !== undefined ? { felt: values.felt } : {}),
+    ...(body.note !== undefined ? { note: values.note } : {}),
+    ...(body.rawText !== undefined ? { rawText: values.rawText } : {}),
+  };
+
   // A retry after a lost response carries the same clientId, so it lands on the
   // row it already wrote instead of creating a second one. Without a clientId
   // there is nothing to match on and it inserts, which is the old behaviour and
@@ -90,13 +140,11 @@ export const POST = route<Body>(async ({ userId, body }) => {
   const [row] = body.clientId
     ? await db.insert(sets).values(values).onConflictDoUpdate({
       target: [sets.workoutId, sets.clientId],
-      // set_index is left alone: the first delivery already claimed a position
-      // in the session, and recomputing it on a retry would renumber the set.
-      set: {
-        reps: values.reps, weightKg: values.weightKg, rpe: values.rpe,
-        toFailure: values.toFailure, isWarmup: values.isWarmup, felt: values.felt,
-        note: values.note, rawText: values.rawText,
-      },
+      // set_index and rest_s are left alone: the first delivery already claimed
+      // a position in the session and measured the gap before it, and
+      // recomputing either on a retry — or on a correction made an hour later —
+      // would renumber the set and record an hour of rest in front of it.
+      set: correction,
     }).returning()
     : await db.insert(sets).values(values).returning();
 
@@ -104,19 +152,33 @@ export const POST = route<Body>(async ({ userId, body }) => {
 });
 
 /**
+ * What the phone claims, sanity-checked on its own terms.
+ *
+ * Split out of `parseLoggedAt` because it has to run BEFORE the session is
+ * known — it is what chooses the session — and so cannot depend on one. A
+ * missing, unreadable or future stamp falls back to now, which is what the
+ * server would have used anyway. The minute of slack absorbs ordinary clock
+ * skew between a phone and a server.
+ */
+function claimedLoggedAt(raw: string | undefined): Date {
+  if (!raw) return new Date();
+  const at = new Date(raw);
+  if (Number.isNaN(at.getTime())) return new Date();
+  if (at.getTime() > Date.now() + 60_000) return new Date();
+  return at;
+}
+
+/**
  * Trusts the phone's clock, within reason.
  *
  * A single-user app has no reason to police this hard, but a clock that is
  * wrong by a year would put the set outside the session and out of every
- * rollup. Anything before the session started or in the future falls back to
- * now, which is what the server would have used anyway.
+ * rollup. Anything before the session started falls back to now; the rest is
+ * `claimedLoggedAt` above.
  */
 function parseLoggedAt(raw: string | undefined, sessionStart: Date): Date {
-  if (!raw) return new Date();
-  const at = new Date(raw);
-  if (Number.isNaN(at.getTime())) return new Date();
+  const at = claimedLoggedAt(raw);
   if (at.getTime() < sessionStart.getTime()) return new Date();
-  if (at.getTime() > Date.now() + 60_000) return new Date();
   return at;
 }
 

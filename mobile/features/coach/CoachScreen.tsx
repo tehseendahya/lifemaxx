@@ -27,10 +27,18 @@ import { useStreamingAsk } from "./useStreamingAsk";
  * spent on it is a sixth taken from the screen opened mid-set.
  *
  * The coach's voice is set by the system prompt — blunt, one recommendation, no
- * praise, "not enough data" when there isn't any. Nothing in this file softens
- * that. There are deliberately no suggestion chips: a chip reading "how am I
- * doing?" is a prompt for a compliment, and the whole point of this coach is
- * that it does not give them.
+ * praise. Nothing in this file softens that. There are deliberately no
+ * suggestion chips: a chip reading "how am I doing?" is a prompt for a
+ * compliment, and the whole point of this coach is that it does not give them.
+ *
+ * What this file USED to say was `"not enough data" when there isn't any`, and
+ * that was the bug written down. The prompt no longer has a refusal in it: a
+ * thin log changes what gets cited and whether a trend may be called, never
+ * whether the question gets answered. See COACH_VOICE in
+ * `src/lib/llm/prompts.ts`. The subtitle below carries the new promise, and it
+ * has to stay true — if it says answers come only from logged data, an account
+ * with nothing logged reads the screen as broken when the coach answers from
+ * the goals text instead.
  */
 
 /** Four lines before the composer starts scrolling instead of growing. */
@@ -166,7 +174,7 @@ export default function CoachScreen() {
     >
       <Screen
         title="Coach"
-        subtitle="Answers come from your own logged data."
+        subtitle="Your own data, with the sample size stated. Thin weeks still get an answer."
         scroll={false}
         action={
           <Button variant="ghost" onPress={() => { tapSelect(); router.back(); }}>
@@ -190,7 +198,10 @@ export default function CoachScreen() {
               <Spinner size="large" />
             </View>
           ) : rows.length === 0 ? (
-            <Empty>Ask about your training, your macros, or what to change this week.</Empty>
+            <Empty>
+              Ask about your plan, a lift, or tonight&apos;s macros. Questions about your goals
+              and your split need nothing logged at all.
+            </Empty>
           ) : (
             rows.map((m) => <Bubble key={m.id} message={m} />)
           )}

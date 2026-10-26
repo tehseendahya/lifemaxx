@@ -1,10 +1,9 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
-import { Button, Sheet, color, hit, radius, space, tnum } from "@/components/ui";
+import { Button, Segmented, Sheet, color, hit, radius, space, tnum } from "@/components/ui";
+import type { Segment } from "@/components/ui";
 import { microLabel } from "@/components/ui/Label";
 import { tapSelect } from "@/lib/haptics";
-import { Segmented } from "./Segmented";
-import type { Segment } from "./Segmented";
 import {
   RPE_CHOICES,
   kindPatch,
@@ -74,19 +73,24 @@ const KIND_SEGMENTS: readonly Segment<SetKind | null>[] = [
  */
 export function GroupActions({
   group,
+  cue,
   onClose,
   onPatchGroup,
   onFirstWarmups,
   onNoteForAll,
+  onEditCue,
   onPickExercise,
   onDeleteGroup,
 }: {
   /** `null` while nothing is open; the sheet animates out on the way to it. */
   group: SetGroup | null;
+  /** This lift's carry-forward cue, or `null`. Changes the button's wording only. */
+  cue: string | null;
   onClose: () => void;
   onPatchGroup: (entryKey: string, patch: RowPatch) => void;
   onFirstWarmups: (entryKey: string, k: number) => void;
   onNoteForAll: (entryKey: string) => void;
+  onEditCue: (exerciseId: string, exerciseName: string) => void;
   onPickExercise: (entryKey: string, query: string) => void;
   onDeleteGroup: (entryKey: string) => void;
 }) {
@@ -105,6 +109,11 @@ export function GroupActions({
    * deleted underneath this sheet.
    */
   const warmups = group === null ? 0 : leadingWarmups(group.rows);
+
+  /** Something to pin a cue to, or `null`. See the button below. */
+  const cuable = group !== null && group.exerciseId !== null && group.exerciseName !== null
+    ? { id: group.exerciseId, name: group.exerciseName }
+    : null;
 
   const common = (() => {
     if (group === null || group.rows.length === 0) return NOTHING_SELECTED;
@@ -192,6 +201,30 @@ export function GroupActions({
           >
             {`NOTE FOR ALL ${n} SETS`}
           </Button>
+
+          {/*
+            Directly under the note button, because the two are the pair the
+            owner has to tell apart: the note above goes on these sets in this
+            session, and the cue here goes on the LIFT and comes back every
+            time. Side by side, the wording of the two buttons is the
+            explanation — "for all N sets" against "to this lift".
+
+            Absent, not disabled, when nothing has resolved: a cue needs an
+            exercise id to be pinned to, and `CHANGE EXERCISE` below is what
+            that group needs first.
+          */}
+          {cuable !== null && (
+            <Button
+              variant="secondary"
+              style={styles.action}
+              onPress={() => {
+                tapSelect();
+                onEditCue(cuable.id, cuable.name);
+              }}
+            >
+              {cue === null ? "PIN A CUE TO THIS LIFT" : "EDIT THE CUE ON THIS LIFT"}
+            </Button>
+          )}
 
           <Button
             variant="secondary"

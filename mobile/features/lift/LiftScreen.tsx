@@ -37,6 +37,16 @@ export default function LiftScreen() {
   const [gymId, setGymId] = useState<string | null>(null);
   const [localStartedAt, setLocalStartedAt] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  /**
+   * Exercises the next session should open with pages for.
+   *
+   * Set by REPEAT THIS SESSION and by PICK A LIFT on the start screen, and
+   * handed to `SessionScreen` as its initial `addedIds`. It seeds PAGES, not
+   * sets: `resolveEntry`'s history rung then reads `bootstrap.lastSets` and puts
+   * last session's weight and reps on the hero button, where one tap logs them
+   * — and nothing at all is written until that tap.
+   */
+  const [seedIds, setSeedIds] = useState<string[]>([]);
 
   const state = deriveSessionState({
     activeStartedAt:
@@ -86,6 +96,22 @@ export default function LiftScreen() {
   }, [gymId, bootstrap.data]);
 
   /**
+   * Start a session that already has pages for these lifts.
+   *
+   * The seed is set BEFORE `start()` is awaited, in the same tick, so the
+   * `localStartedAt` that flips this component over to `SessionScreen` and the
+   * seed that screen initialises from land in one batch — the session mounts
+   * with its pages already there rather than mounting empty and filling in.
+   */
+  const startWith = useCallback(
+    async (exerciseIds: string[]) => {
+      setSeedIds(exerciseIds);
+      await start();
+    },
+    [start],
+  );
+
+  /**
    * A session start the outbox gave up on.
    *
    * `dropStaleStarts` bins a start older than six hours, because the backend
@@ -104,6 +130,9 @@ export default function LiftScreen() {
 
     for (const item of fresh) handled.current.add(item.id);
     setLocalStartedAt(null);
+    // The session is over before it began, so a seed left behind would page up
+    // the repeated lifts the next time START is pressed on its own.
+    setSeedIds([]);
     setNotice(
       fresh[0].lastError ??
         "That session could not be saved, so it was not started. The sets logged in it were not filed.",
@@ -124,6 +153,7 @@ export default function LiftScreen() {
         gymId={gymId}
         onGymChange={setGymId}
         onStart={start}
+        onStartWith={startWith}
         refreshing={refreshing}
         onRefresh={refresh}
         notice={notice ?? errorLine(bootstrap.error, session.error)}
@@ -139,8 +169,10 @@ export default function LiftScreen() {
       startedAtMs={state.startedAtMs}
       pendingSession={state.pending}
       notice={notice}
+      seedExerciseIds={seedIds}
       onStopped={() => {
         setLocalStartedAt(null);
+        setSeedIds([]);
         setNotice(null);
         refresh();
       }}

@@ -9,8 +9,12 @@ import {
   emptyDraftItem,
   formatIsoDateLabel,
   formatMacroLine,
+  itemsFootnote,
+  mealDetail,
+  mealItemPortion,
   mealNamesLine,
   mealSlotLine,
+  mealSourceLine,
   mealSummaryLine,
   newDraftKey,
   patchItem,
@@ -293,9 +297,173 @@ describe("a row that holds more than one sitting", () => {
     expect(mealNamesLine(meal({ items: [item("  ")], note: "late snack" }))).toBe("late snack");
   });
 
-  it("leaves the unbounded line alone for the action sheet's title", () => {
-    // The sheet truncates to a character budget of its own and wants every
-    // name; only the list row has a two-line budget to run out of.
+  it("leaves the unbounded line alone for the screen reader", () => {
+    // `MealRow`'s accessibilityLabel reads every name — a screen reader has no
+    // two-line budget to run out of, and "+7 more" is useless read aloud. Only
+    // the visible line is bounded.
     expect(mealSummaryLine(wholeDay)).toContain("Olive oil");
+  });
+
+  /*
+   * The count alone was only ever a two-line budget if the names were short,
+   * and four long ones clip at two lines with no tail — the same illegible row
+   * the count was added to fix, one layer along.
+   */
+  it("counts the overflow when the names are long rather than many", () => {
+    const long = meal({
+      items: [
+        "Grilled chicken breast, skin removed",
+        "Steamed jasmine rice",
+        "Olive oil",
+        "Mixed green salad",
+      ].map(item),
+    });
+    expect(mealNamesLine(long))
+      .toBe("Grilled chicken breast, skin removed, Steamed jasmine rice +2 more");
+  });
+
+  it("renders a single long name whole rather than dropping it", () => {
+    // There is nothing else to show and "+0 more" is not a thing, so the first
+    // name is exempt from both budgets and the row clips it at two lines.
+    const name = "Slow-roasted pork shoulder with crackling, apple sauce and buttered greens";
+    expect(mealNamesLine(meal({ items: [item(name)] }))).toBe(name);
+    expect(mealNamesLine(meal({ items: [item(name), item("Olive oil")] })))
+      .toBe(`${name} +1 more`);
+  });
+});
+
+/*
+ * The owner's complaint, in their words: "it says '+2 more' but I'm never able
+ * to see what I actually ate, even if I try to click into it."
+ *
+ * `MealDto.items` has carried every name, portion and macro since the route was
+ * written. Nothing rendered them. This is the view that does, as data.
+ */
+describe("the breakdown behind the row", () => {
+  const dinner: MealDto = {
+    id: "m2",
+    slot: "dinner",
+    note: "ground turkey bowl with yogurt, eggs and a big tortilla",
+    source: "photo",
+    confidence: 0.72,
+    kcal: 1683,
+    proteinG: 143,
+    carbsG: 64,
+    fatG: 94,
+    items: [
+      { name: "Ground turkey", qty: 350, unit: "g", kcal: 740, proteinG: 84, carbsG: 0, fatG: 42 },
+      { name: "Greek yogurt", qty: 1, unit: "cup", kcal: 150, proteinG: 25, carbsG: 9, fatG: 4 },
+      { name: "Whole eggs", qty: 3, unit: null, kcal: 234, proteinG: 19, carbsG: 2, fatG: 16 },
+      { name: "XL flour tortilla", qty: 1, unit: null, kcal: 320, proteinG: 8, carbsG: 52, fatG: 8 },
+      { name: "Olive oil", qty: 1, unit: "tbsp", kcal: 119, proteinG: 0, carbsG: 0, fatG: 14 },
+      { name: "Shredded cheddar", qty: 30, unit: "g", kcal: 120, proteinG: 7, carbsG: 1, fatG: 10 },
+    ],
+  };
+
+  const one = (over: Partial<MealDto>): MealDto => ({
+    ...dinner, id: "m3", items: [dinner.items[0]], kcal: 740, proteinG: 84, carbsG: 0, fatG: 42, ...over,
+  });
+
+  it("is the row the owner photographed", () => {
+    // Pins the fixture to the screenshot. If this line changes, the complaint
+    // this describe block answers is no longer the one being tested.
+    expect(mealNamesLine(dinner))
+      .toBe("Ground turkey, Greek yogurt, Whole eggs, XL flour tortilla +2 more");
+  });
+
+  it("names the count on the title instead of clipping the names", () => {
+    expect(mealDetail(dinner).title).toBe("Dinner · 6 items");
+  });
+
+  it("shows every item, with its own macros", () => {
+    const d = mealDetail(dinner);
+
+    expect(d.items).toHaveLength(6);
+    expect(d.items[0]).toMatchObject({
+      name: "Ground turkey", portion: "350 g", macros: "740 kcal · 84p 0c 42f",
+    });
+    // The two the row could not fit are the whole point of the view.
+    expect(d.items[4]).toMatchObject({ name: "Olive oil", portion: "1 tbsp" });
+    expect(d.items[5]).toMatchObject({ name: "Shredded cheddar", portion: "30 g" });
+    expect(d.items.map((i) => i.name)).toContain("XL flour tortilla");
+  });
+
+  it("keeps the meal's own totals as the headline", () => {
+    const d = mealDetail(dinner);
+    expect(d.total).toBe("1683 kcal · 143p 64c 94f");
+    // These six add to exactly 1683, so there is nothing to explain.
+    expect(d.footnote).toBeNull();
+    expect(d.empty).toBeNull();
+  });
+
+  it("keeps the sentence the meal was logged from", () => {
+    expect(mealDetail(dinner).note)
+      .toBe("ground turkey bowl with yogurt, eggs and a big tortilla");
+    expect(mealDetail({ ...dinner, note: "   " }).note).toBeNull();
+  });
+
+  it("says where the numbers came from", () => {
+    expect(mealSourceLine(dinner)).toBe("Photo estimate · 72% confident");
+    expect(mealSourceLine({ ...dinner, source: "text", confidence: null }))
+      .toBe("From what you typed");
+    // A repeat posts `confidence: null` on purpose: those figures were accepted
+    // by a person, so there is no model claim left to report.
+    expect(mealSourceLine({ ...dinner, source: "repeat", confidence: null }))
+      .toBe("Repeated from an earlier meal");
+    expect(mealSourceLine({ ...dinner, source: "something new" })).toBeNull();
+  });
+
+  it("does not print a one-item meal's macros twice", () => {
+    const d = mealDetail(one({}));
+    expect(d.title).toBe("Dinner");
+    expect(d.total).toBe("740 kcal · 84p 0c 42f");
+    // Same figure, forty points apart, reads as a bug rather than a breakdown.
+    expect(d.items[0]).toMatchObject({ name: "Ground turkey", portion: "350 g", macros: null });
+  });
+
+  it("un-folds the one-item case when the two figures disagree", () => {
+    // The footnote would otherwise be talking about a number not on screen.
+    const d = mealDetail(one({ kcal: 900 }));
+    expect(d.footnote).toBe("These items add to 740 kcal; the meal was saved as 900.");
+    expect(d.items[0].macros).toBe("740 kcal · 84p 0c 42f");
+  });
+
+  it("explains a column that does not add up, and tolerates a rounding tick", () => {
+    const frac = (kcal: number) => ({
+      name: "Rice", qty: null, unit: null, kcal, proteinG: 4, carbsG: 44, fatG: 1,
+    });
+    // Three items rounding to 100 each: the digits on screen add to 300.
+    const items = [frac(100.4), frac(100.4), frac(100.4)];
+    expect(itemsFootnote({ ...dinner, items, kcal: 301 })).toBeNull();
+    expect(itemsFootnote({ ...dinner, items, kcal: 299 })).toBeNull();
+    expect(itemsFootnote({ ...dinner, items, kcal: 340 }))
+      .toBe("These items add to 300 kcal; the meal was saved as 340.");
+    expect(itemsFootnote({ ...dinner, items: [] })).toBeNull();
+  });
+
+  it("says so rather than drawing an empty list", () => {
+    const d = mealDetail({ ...dinner, items: [] });
+    expect(d.items).toEqual([]);
+    expect(d.empty).toBe("No item breakdown was saved for this meal — only its totals.");
+    // The headline survives: a meal with no breakdown still has totals.
+    expect(d.total).toBe("1683 kcal · 143p 64c 94f");
+  });
+
+  it("formats a portion without inventing or losing precision", () => {
+    const at = (qty: number | null, unit: string | null) =>
+      mealItemPortion({ name: "x", qty, unit, kcal: 0, proteinG: 0, carbsG: 0, fatG: 0 });
+
+    expect(at(3, "large")).toBe("3 large");
+    // The model emits fractional quantities; 1.5 must not round to 2.
+    expect(at(1.5, "cups")).toBe("1.5 cups");
+    // And a whole number must not grow a decimal.
+    expect(at(3, null)).toBe("3");
+    expect(at(null, "g")).toBeNull();
+    expect(at(2, "  ")).toBe("2");
+  });
+
+  it("names a blank item the same way the save does", () => {
+    const blank = { name: "  ", qty: null, unit: null, kcal: 10, proteinG: 0, carbsG: 0, fatG: 1 };
+    expect(mealDetail({ ...dinner, items: [...dinner.items, blank] }).items[6].name).toBe("Item");
   });
 });

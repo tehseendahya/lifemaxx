@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { CATALOGUE, TODAY } from "./fixture";
-import { clockSecIn, dateIn, distanceMiIn, extractGoalClaims, matchExercise, weightLbIn } from "./goals";
+import {
+  clockSecIn, dateIn, distanceMiIn, extractGoalClaims, matchExercise, repsIn, restKind,
+  unitWeightLbIn, weightLbIn,
+} from "./goals";
+import type { CatalogueExercise } from "../../lib/types";
 
 /**
  * Four narrow patterns over free text, and the thing being guarded is not
@@ -216,5 +220,208 @@ describe("the pure helpers", () => {
 
   it("matches nothing against an empty catalogue", () => {
     expect(matchExercise("bench press 225", [])).toBeNull();
+  });
+});
+
+/*
+ * ─────────────────────────────────────────────────────────────────────────────
+ * The round that added rep targets, a second dated target per sentence, and
+ * plural tolerance. Driven entirely by the owner's real goals_text, every
+ * sentence of which is asserted below.
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+
+/** The catalogue plus the one row the owner's text names that the fixture lacks. */
+const WITH_PULLUP: CatalogueExercise[] = [
+  ...CATALOGUE,
+  {
+    id: "ex-wpu",
+    name: "Weighted Pull-Up",
+    slug: "weighted-pull-up",
+    incrementLb: 5,
+    equipment: "bodyweight",
+    muscles: [],
+  },
+];
+
+const extractFull = (text: string) => extractGoalClaims(text, WITH_PULLUP, TODAY);
+
+/** Verbatim, newlines and all. The newlines are what split it into sentences. */
+const OWNER_GOALS = [
+  "Main priority is strength on compound lifts, getting arms to be bigger, and getting good strong abs.",
+  "Main lifts: 205 bench press by December, 225 by May.",
+  "10 weighted pull ups with 45lb plate by May",
+  "Current split: chest, side delts, and biceps, back, rear delts, and triceps, legs",
+  "Abs and run 2x per week",
+].join("\n");
+
+describe("the owner's goals_text, sentence by sentence", () => {
+  it("finds four targets in it and leaves three sentences as prose", () => {
+    const { claims, rest } = extractFull(OWNER_GOALS);
+
+    expect(claims).toEqual([
+      {
+        kind: "lift",
+        sentence: "Main lifts: 205 bench press by December, 225 by May",
+        exerciseId: "ex-bench",
+        exerciseName: "Barbell Bench Press",
+        targetLb: 205,
+        byDate: "2026-12-01",
+      },
+      {
+        kind: "lift",
+        sentence: "Main lifts: 205 bench press by December, 225 by May",
+        exerciseId: "ex-bench",
+        exerciseName: "Barbell Bench Press",
+        targetLb: 225,
+        byDate: "2027-05-01",
+      },
+      {
+        kind: "lift_reps",
+        sentence: "10 weighted pull ups with 45lb plate by May",
+        exerciseId: "ex-wpu",
+        exerciseName: "Weighted Pull-Up",
+        targetReps: 10,
+        loadLb: 45,
+        byDate: "2027-05-01",
+      },
+    ]);
+
+    expect(rest).toEqual([
+      "Main priority is strength on compound lifts, getting arms to be bigger, "
+        + "and getting good strong abs",
+      "Current split: chest, side delts, and biceps, back, rear delts, and triceps, legs",
+      "Abs and run 2x per week",
+    ]);
+  });
+
+  it("files the priorities line as an aim and the other two as context", () => {
+    const { rest } = extractFull(OWNER_GOALS);
+    expect(rest.map(restKind)).toEqual(["aim", "context", "context"]);
+  });
+});
+
+describe("plural tolerance", () => {
+  it("reaches a singular catalogue name from a plural sentence", () => {
+    expect(matchExercise("10 weighted pull ups", WITH_PULLUP)?.name).toBe("Weighted Pull-Up");
+    expect(matchExercise("preacher curls 50 lb", WITH_PULLUP)?.name).toBe("Preacher Curl");
+  });
+
+  it("still refuses a partial name — the needle did not get looser", () => {
+    expect(matchExercise("bench 225 by March", WITH_PULLUP)).toBeNull();
+    expect(matchExercise("benches 225", WITH_PULLUP)).toBeNull();
+  });
+
+  it("does not match a bare muscle name to anything", () => {
+    for (const word of ["triceps", "abs", "biceps", "side delts", "legs"]) {
+      expect(matchExercise(word, WITH_PULLUP)).toBeNull();
+    }
+  });
+});
+
+describe("a second dated target in one sentence", () => {
+  it("reads both halves of the owner's main-lifts line", () => {
+    const claims = extractFull("Main lifts: 205 bench press by December, 225 by May.").claims;
+    expect(claims).toHaveLength(2);
+    expect(claims[0]).toMatchObject({ targetLb: 205, byDate: "2026-12-01" });
+    expect(claims[1]).toMatchObject({ targetLb: 225, byDate: "2027-05-01" });
+    // Both name the same lift: the second inherits it rather than re-matching.
+    expect(claims[1]).toMatchObject({ exerciseId: "ex-bench", kind: "lift" });
+  });
+
+  it("needs a month beside the second figure, so a set log stays one claim", () => {
+    // The guard that matters. Without it this is four bench goals.
+    const claims = extractFull("bench press 165x5, 165x5, 175x3, 155x7").claims;
+    expect(claims).toEqual([]);
+
+    const dated = extractFull("barbell back squat 315 by March, 335").claims;
+    expect(dated).toHaveLength(1);
+    expect(dated[0]).toMatchObject({ targetLb: 315 });
+  });
+});
+
+describe("rep targets", () => {
+  it("reads a leading count, the added load and the deadline", () => {
+    expect(extractFull("10 weighted pull ups with 45lb plate by May").claims).toEqual([{
+      kind: "lift_reps",
+      sentence: "10 weighted pull ups with 45lb plate by May",
+      exerciseId: "ex-wpu",
+      exerciseName: "Weighted Pull-Up",
+      targetReps: 10,
+      loadLb: 45,
+      byDate: "2027-05-01",
+    }]);
+  });
+
+  it("reads the explicit form too, and leaves the load null without a unit", () => {
+    const [claim] = extractFull("Barbell back squat for 5 reps at bodyweight").claims;
+    expect(claim).toMatchObject({ kind: "lift_reps", targetReps: 5, loadLb: null });
+  });
+
+  it("NEVER emits a weight target from a rep sentence", () => {
+    /*
+     * The whole point of the guard. `45` here is a plate hung off a belt, not a
+     * bench press target; read as `kind: "lift"` it would make gapFor compute
+     * e1RM 180 → 45 and render an unmet goal as achieved, in good-news green.
+     */
+    const { claims } = extractFull("10 weighted pull ups with 45lb plate by May");
+    expect(claims.every((c) => c.kind !== "lift")).toBe(true);
+  });
+
+  it("leaves a plain weight target alone — no rep count, no change", () => {
+    const [claim] = extractFull("Bench press 225 by March.").claims;
+    expect(claim).toMatchObject({ kind: "lift", targetLb: 225 });
+  });
+});
+
+describe("'may' as a month", () => {
+  it("takes a preposition as the signal, which is how the owner writes it", () => {
+    expect(dateIn("225 by May", TODAY)).toBe("2027-05-01");
+    expect(dateIn("45lb plate by May", TODAY)).toBe("2027-05-01");
+    expect(dateIn("in May", TODAY)).toBe("2027-05-01");
+  });
+
+  it("still reads the modal verb as a verb", () => {
+    expect(dateIn("I may add a deload", TODAY)).toBeNull();
+    expect(dateIn("maybe a deload", TODAY)).toBeNull();
+    // The first month in the sentence is still March: "I may" is not a month,
+    // so it does not outrank it.
+    expect(dateIn("I may add a deload in March", TODAY)).toBe("2027-03-01");
+  });
+});
+
+describe("restKind", () => {
+  it("files a leading label as context", () => {
+    expect(restKind("Current split: chest, side delts, and biceps")).toBe("context");
+    expect(restKind("Schedule: four days on, one off")).toBe("context");
+    expect(restKind("Gym: the one on 5th")).toBe("context");
+  });
+
+  it("files a scheduling cue as context", () => {
+    expect(restKind("Abs and run 2x per week")).toBe("context");
+    expect(restKind("Deload every 6th week")).toBe("context");
+    expect(restKind("Lift Mon, Wed, Fri")).toBe("context");
+  });
+
+  it("files everything else as an aim", () => {
+    expect(restKind("Work on arm size")).toBe("aim");
+    expect(restKind("Getting good strong abs")).toBe("aim");
+    expect(restKind("Feel strong")).toBe("aim");
+  });
+});
+
+describe("the helpers the new kinds added", () => {
+  it("repsIn prefers the explicit form and will not read a weight", () => {
+    expect(repsIn("bench 5 reps at 225")).toBe(5);
+    expect(repsIn("10 weighted pull ups")).toBe(10);
+    // Three digits cannot be a leading rep count.
+    expect(repsIn("205 bench press by December")).toBeNull();
+    expect(repsIn("Bench press 225")).toBeNull();
+  });
+
+  it("unitWeightLbIn ignores a bare figure and converts kg", () => {
+    expect(unitWeightLbIn("45lb plate")).toBe(45);
+    expect(unitWeightLbIn("20 kg plate")).toBe(44);
+    expect(unitWeightLbIn("225 by March")).toBeNull();
   });
 });

@@ -35,8 +35,17 @@ export async function GET(req: Request) {
     const { prefix, loggedDays } = await withUser(user.id, () =>
       buildCoachContext(user.id, today));
 
-    // Under five logged days the honest answer is that the trend is noise.
-    if (loggedDays < 5) continue;
+    /*
+     * Nothing logged all week means there is no week to review, and an empty
+     * nudge is how people turn notifications off — the same rule the nightly
+     * verdict follows. One day is a different case: the review is still worth
+     * sending, it just says so inside itself. The prefix carries a DATA
+     * COVERAGE block marking the thin streams, and the voice rules forbid
+     * calling a trend off them, so a one-day week produces a review about the
+     * goals and the plan rather than a fabricated trend. It used to skip under
+     * five days, which is why a new user's first month was silent.
+     */
+    if (loggedDays === 0) continue;
 
     try {
       const review = await getLlm().text({
@@ -46,7 +55,7 @@ export async function GET(req: Request) {
           {
             role: "user",
             content:
-              "Write the weekly review. Three sentences maximum: what the weight trend and intake actually say, which lift or muscle group moved or stalled, and the single thing to change this week. If the goals are competing, say which one was traded against.",
+              "Write the weekly review. Three sentences maximum: what the weight trend and intake actually say, which lift or muscle group moved or stalled, and the single thing to change this week. Where a stream is marked thin, say what it does not yet show and move on — do not drop the sentence. If the goals are competing, say which one was traded against.",
           },
         ],
         maxTokens: 350,

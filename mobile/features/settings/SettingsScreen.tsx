@@ -5,13 +5,23 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import {
   Button, Card, Empty, Label, NumberPad, Screen, Sheet, Spinner, Stat, Toggle,
-  color, font, radius, space, tnum,
+  color, font, microLabel, radius, space, tnum,
 } from "@/components/ui";
 import { apiPost } from "@/lib/api";
 import { signOut, useSession } from "@/lib/auth";
 import { queryKeys } from "@/lib/query";
 import { tapDone, tapError, tapSave, tapSelect } from "@/lib/haptics";
 import { useBootstrap } from "@/features/today/useBootstrap";
+/*
+ * Two imports reaching into `features/today`, both deliberate and both
+ * read-only. `goalsBlock` is the one implementation of "what does this prose
+ * say" and Today's own Goals card is a three-row preview of the same block —
+ * two copies of that split would come to disagree about the owner's text.
+ * `NavLine` is the app's one "go somewhere / open something" row; a second
+ * copy here would be a second tap affordance that only looks the same.
+ */
+import { goalsBlock } from "@/features/today/model";
+import { NavLine } from "@/features/today/NavLine";
 import type { Bootstrap } from "@/lib/types";
 
 import { ConnectionCard, useReachability } from "./ConnectionCard";
@@ -70,6 +80,36 @@ const styles = StyleSheet.create({
   },
   goalsExplainer: { color: color.muted, fontSize: 12, lineHeight: 18, flex: 1 },
   saved: { fontFamily: font.mono, color: color.good, fontSize: 10, letterSpacing: 1.4 },
+
+  /* ------------------------------------------------- goals, read-only view */
+
+  goalsSection: { marginTop: space.lg },
+  dividedTop: { borderTopWidth: 1, borderTopColor: color.line },
+  targetBlock: { paddingVertical: space.md },
+  targetHead: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+    gap: space.md,
+  },
+  /*
+   * `tnum` on the headline as well as the gap: "Barbell Bench Press → 205 lb"
+   * and "→ 225 lb" sit one under the other and the figures have to line up.
+   */
+  targetHeadline: { ...tnum, color: color.ink, fontSize: 15, flexShrink: 1 },
+  /*
+   * The countdown is the primary pressure mark on the row, and it is a
+   * countdown rather than a progress bar on purpose: every one of the owner's
+   * goals carries a date, and a percentage needs a baseline that one logged
+   * session cannot supply.
+   */
+  countdown: { ...microLabel, ...tnum },
+  targetGap: { ...tnum, fontSize: 13, lineHeight: 18, marginTop: 2 },
+  targetPace: { ...tnum, fontSize: 12, lineHeight: 17, marginTop: 2 },
+  targetSentence: { color: color.muted, fontSize: 12, lineHeight: 17, marginTop: space.xs },
+
+  aimLine: { color: color.ink, fontSize: 14, lineHeight: 21, paddingVertical: 3 },
+  contextLine: { color: color.muted, fontSize: 13, lineHeight: 19, paddingVertical: 2 },
 
   email: { fontFamily: font.mono, color: color.ink, fontSize: 13, marginBottom: space.md },
   about: { color: color.muted, fontSize: 12, lineHeight: 18, marginTop: space.sm },
@@ -312,6 +352,22 @@ function MaintenanceCard({ data }: { data: Bootstrap }) {
 
 // -------------------------------------------------------------------- goals
 
+/**
+ * Three kinds of content from one text box, plus the box.
+ *
+ * The owner's complaint was that Goals is useful but the wrong shape: they have
+ * hard targets ("205 bench by December"), soft aims ("work on arm size") and
+ * standing context ("current split: ..."), and one undifferentiated textarea
+ * rendered all three identically. So `goalsBlock` splits the same string three
+ * ways and each section is presented as what it is.
+ *
+ * What did NOT change, and must not: the free text is still the single source
+ * of truth, `POST /api/profile { goalsText }` is still the only write, and the
+ * coach still reads the entire string on every answer. Nothing on this card
+ * stores a goal; it reads the prose the owner typed and shows what it could
+ * measure. That is the whole reason "detect it from their own words" is safe —
+ * there is no second copy to drift.
+ */
 function GoalsCard({ data }: { data: Bootstrap }) {
   const client = useQueryClient();
 
@@ -319,6 +375,18 @@ function GoalsCard({ data }: { data: Bootstrap }) {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  /**
+   * Whether the editor is open.
+   *
+   * Seeded once from whether there was anything to read when this card mounted,
+   * and never resynced: a refetch landing mid-sentence must not close the box
+   * the owner is typing in, which is the same reason `text` is seeded once
+   * below. `autoFocus` is captured from the same first render, so the keyboard
+   * comes up only on the screen where writing is the only thing to do.
+   */
+  const [autoFocus] = useState(() => data.goalsText.trim() === "");
+  const [editing, setEditing] = useState(autoFocus);
 
   /** What the server last told us, so a blur with no edit does not POST. */
   const committed = useRef<string | null>(null);
@@ -375,35 +443,152 @@ function GoalsCard({ data }: { data: Bootstrap }) {
     }
   }
 
+  const block = goalsBlock(data);
+
   return (
     <Card>
       <Label>Goals</Label>
+
+      {block.empty !== null && <Text style={styles.muted}>{block.empty}</Text>}
+
+      {block.targets.length > 0 && (
+        <View>
+          <Label>Targets</Label>
+          {block.targets.map((row, i) => (
+            <View key={row.key} style={[styles.targetBlock, i > 0 && styles.dividedTop]}>
+              <View style={styles.targetHead}>
+                <Text style={styles.targetHeadline}>{row.headline}</Text>
+                {row.deadline !== null && (
+                  <Text
+                    style={[
+                      styles.countdown,
+                      { color: row.deadline.tone === "warn" ? color.warn : color.muted },
+                    ]}
+                  >
+                    {row.deadline.label}
+                  </Text>
+                )}
+              </View>
+
+              <Text style={[styles.targetGap, { color: gapColour(row.gap.tone) }]}>
+                {row.gap.text}
+              </Text>
+
+              {row.pace !== null && (
+                <Text
+                  style={[
+                    styles.targetPace,
+                    { color: row.pace.tone === "warn" ? color.warn : color.muted },
+                  ]}
+                >
+                  {row.pace.text}
+                </Text>
+              )}
+
+              {/*
+                The owner's own sentence, verbatim, under every derived line
+                above it. It is the only reason those lines can be trusted —
+                and it is where the half of a sentence this app did not track
+                stays visible instead of silently disappearing.
+              */}
+              <Text style={styles.targetSentence} numberOfLines={2}>{row.sentence}</Text>
+            </View>
+          ))}
+        </View>
+      )}
+
+      {block.note !== null && (
+        <Text style={[styles.muted, { marginTop: space.md }]}>{block.note}</Text>
+      )}
+
+      {block.aims.length > 0 && (
+        <View style={styles.goalsSection}>
+          <Label>Also working on</Label>
+          {/*
+            No bar, no figure, no percentage, no tone. "Getting arms to be
+            bigger" has no honest progress pattern — this app does not measure
+            arms — and a bar drawn beside it would be a fabricated
+            measurement. Text is the correct rendering of a qualitative goal.
+          */}
+          {block.aims.map((line, i) => (
+            <Text key={i} style={styles.aimLine}>{line}</Text>
+          ))}
+        </View>
+      )}
+
+      {block.context.length > 0 && (
+        <View style={styles.goalsSection}>
+          <Label>The coach also knows</Label>
+          {/*
+            The owner's split and schedule, visibly read and visibly NOT turned
+            into a schema. There is no split, program or routine object in this
+            app — "what should I train" is answered from the muscle-debt
+            ranking — and this section is deliberately not where one gets
+            introduced. These are strings in a paragraph the model reads.
+          */}
+          {block.context.map((line, i) => (
+            <Text key={i} style={styles.contextLine}>{line}</Text>
+          ))}
+        </View>
+      )}
+
       {/*
-        Free text, never a picker. A goal dropdown would reduce "half marathon
-        in the fall, plus shoulders and back" to one bit of information, and
-        this is the string the model reads before it answers anything.
+        The editor, collapsed once there is something to read.
+        The box is five lines tall and the owner now reads this card far more
+        often than they rewrite it, so the reading view gets the space and the
+        writing view is one tap away. It stays open in the empty case, where
+        writing is the only thing to do.
       */}
-      <TextInput
-        value={text ?? ""}
-        onChangeText={setText}
-        onBlur={() => { void commit(); }}
-        placeholder="Half marathon in the fall. Shoulders and back. Abs."
-        placeholderTextColor={color.muted}
-        style={styles.goals}
-        multiline
-        editable={text !== null && !saving}
-        accessibilityLabel="Your goals, in your own words"
-      />
-      <View style={styles.goalsFoot}>
-        <Text style={styles.goalsExplainer}>
-          Written in your own words. The coach reads this on every answer.
-        </Text>
-        {saving ? <Spinner /> : saved ? <Text style={styles.saved}>SAVED</Text> : null}
-      </View>
-      {error !== null && <Text style={styles.error}>{error}</Text>}
+      {!editing ? (
+        <NavLine onPress={() => setEditing(true)}>Edit goals →</NavLine>
+      ) : (
+        <View style={styles.goalsSection}>
+          {/*
+            Free text, never a picker. A goal dropdown would reduce "half
+            marathon in the fall, plus shoulders and back" to one bit of
+            information, and this is the string the model reads before it
+            answers anything. Everything above is a rendering OF this box, not
+            a second place a goal is stored.
+          */}
+          <TextInput
+            value={text ?? ""}
+            onChangeText={setText}
+            onBlur={() => { void commit(); }}
+            placeholder="205 bench press by December. Work on arm size. Current split: push, pull, legs."
+            placeholderTextColor={color.muted}
+            style={styles.goals}
+            multiline
+            autoFocus={autoFocus}
+            editable={text !== null && !saving}
+            accessibilityLabel="Your goals, in your own words"
+          />
+          <View style={styles.goalsFoot}>
+            <Text style={styles.goalsExplainer}>
+              Written in your own words. The coach reads this on every answer.
+            </Text>
+            {saving ? <Spinner /> : saved ? <Text style={styles.saved}>SAVED</Text> : null}
+          </View>
+          {error !== null && <Text style={styles.error}>{error}</Text>}
+          {/*
+            Only offered when there is a reading view to collapse back to —
+            which includes the case where the owner arrived at an empty box and
+            has just written their first goal, so `block` is no longer empty
+            even though this card mounted empty.
+          */}
+          {block.empty === null && (
+            <NavLine onPress={() => { void commit(); setEditing(false); }}>
+              Done editing →
+            </NavLine>
+          )}
+        </View>
+      )}
     </Card>
   );
 }
+
+/** The one tone mapping on this card. `good` is met, `muted` is unmeasured. */
+const gapColour = (tone: "good" | "ink" | "muted"): string =>
+  tone === "good" ? color.good : tone === "muted" ? color.muted : color.ink;
 
 // ------------------------------------------------------------------- account
 

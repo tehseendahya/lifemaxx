@@ -1,7 +1,7 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
-import { color, hit, radius, space, tnum } from "@/components/ui";
-import { microLabel } from "@/components/ui/Label";
+import { microLabel } from "./Label";
+import { color, hit, radius, space, tnum } from "./tokens";
 
 /**
  * One question, every answer visible, one tap.
@@ -15,12 +15,11 @@ import { microLabel } from "@/components/ui/Label";
  *
  * ── WHERE THIS LIVES ───────────────────────────────────────────────────────
  *
- * Beside the feature that needed it, not in `components/ui/`, and that is a
- * deliberate and reversible choice: no other screen uses a segmented control
- * today, and `components/ui/index.ts` is the single file every feature imports
- * from. Move it there the moment a second feature wants one — it is built from
- * tokens only and imports nothing from this folder, so the move is a `git mv`
- * and an export line.
+ * It started in `features/voice/`, with a note saying to move it here the
+ * moment a second feature wanted one. That moment arrived: the live session
+ * card had warmup and to-failure as two independent pill toggles, the owner
+ * turned both on at once, and the fix is the same control the confirmation
+ * sheet already had. Both now import it from the barrel.
  *
  * It follows the design system's rules rather than reinventing them: no colour
  * outside `tokens.ts`, 44pt targets, tabular numerals on anything numeric, and

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 
 import {
-  Button, Empty, Screen, Sheet, Spinner,
+  Button, Empty, Screen, Spinner,
   color, space,
 } from "@/components/ui";
 import { tapDone, tapError } from "@/lib/haptics";
@@ -12,9 +12,9 @@ import { DateStepper } from "./DateStepper";
 import { FuelCard } from "./FuelCard";
 import { MealCapture } from "./MealCapture";
 import { MealRow } from "./MealRow";
+import { MealSheet } from "./MealSheet";
 import {
-  analyzedFromMealItems, asMealSlot, formatIsoDateLabel, formatMacroLine,
-  mealSummaryLine, relativeDayLabel,
+  analyzedFromMealItems, asMealSlot, formatIsoDateLabel, relativeDayLabel,
 } from "./model";
 import { OFFLINE_SAVE, deleteMeal, describeFailure, saveMeal } from "./requests";
 import { useFoodDay } from "./useFoodDay";
@@ -22,10 +22,6 @@ import { useFoodDay } from "./useFoodDay";
 const styles = StyleSheet.create({
   notice: { color: color.muted, fontSize: 12, lineHeight: 17, marginBottom: space.md },
   bad: { color: color.bad, fontSize: 12, lineHeight: 17, marginBottom: space.md },
-
-  sheetSummary: { color: color.muted, fontSize: 13, lineHeight: 19, marginBottom: space.lg },
-  sheetActions: { gap: space.sm },
-  sheetBad: { color: color.bad, fontSize: 12, lineHeight: 17, marginTop: space.sm },
 
   centre: { paddingTop: space.xxl * 2, alignItems: "center" },
 });
@@ -43,23 +39,26 @@ const styles = StyleSheet.create({
 export default function FoodScreen() {
   const day = useFoodDay();
 
-  /** The meal whose action sheet is open. */
-  const [actionsFor, setActionsFor] = useState<MealDto | null>(null);
+  /** The meal whose detail sheet is open. */
+  const [openMeal, setOpenMeal] = useState<MealDto | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
   /** One line under the capture card: "Added to today." after a repeat. */
   const [notice, setNotice] = useState<string | null>(null);
 
-  function openActions(meal: MealDto) {
+  function openDetail(meal: MealDto) {
     setActionError(null);
     setNotice(null);
-    setActionsFor(meal);
+    setOpenMeal(meal);
   }
 
-  function closeActions() {
+  function closeDetail() {
+    // Mid-delete the meal may be about to disappear from the list behind the
+    // sheet; closing the panel out from under the spinner would leave the user
+    // unsure whether it went through.
     if (actionBusy) return;
-    setActionsFor(null);
+    setOpenMeal(null);
     setActionError(null);
   }
 
@@ -89,7 +88,7 @@ export default function FoodScreen() {
       });
       tapDone();
       day.invalidateToday();
-      setActionsFor(null);
+      setOpenMeal(null);
       // Only worth saying when the user is looking at a different day, where
       // the new meal will not appear in the list in front of them.
       setNotice(day.selected === null ? null : "Added to today.");
@@ -108,7 +107,7 @@ export default function FoodScreen() {
       await deleteMeal(meal.id);
       tapDone();
       day.invalidateDay();
-      setActionsFor(null);
+      setOpenMeal(null);
     } catch (err) {
       tapError();
       setActionError(describeFailure(err, "No signal. The meal is still here; try again later."));
@@ -176,60 +175,27 @@ export default function FoodScreen() {
             </Empty>
           ) : (
             day.data.meals.map((meal) => (
-              <MealRow key={meal.id} meal={meal} onOpenActions={openActions} />
+              <MealRow key={meal.id} meal={meal} onOpen={openDetail} />
             ))
           )}
         </>
       ) : null}
 
       {/*
-        The only confirmation mechanism in the app. A destructive action behind
-        an `Alert.alert` would be the system interrupting the user in the system
-        typeface; this is the app continuing, with 56pt targets.
+        The one place the owner can see what they ate, and the app's only
+        confirmation mechanism. A destructive action behind an `Alert.alert`
+        would be the system interrupting the user in the system typeface; this
+        is the app continuing, with 56pt targets — and now with the meal's
+        items above them, which is what the tap was always supposed to show.
       */}
-      <Sheet
-        visible={actionsFor !== null}
-        onClose={closeActions}
-        title={actionsFor !== null ? asTitle(actionsFor) : undefined}
-      >
-        {actionsFor !== null ? (
-          <>
-            <Text style={styles.sheetSummary} numberOfLines={2}>
-              {formatMacroLine({
-                kcal: actionsFor.kcal,
-                proteinG: actionsFor.proteinG,
-                carbsG: actionsFor.carbsG,
-                fatG: actionsFor.fatG,
-              })}
-            </Text>
-            <View style={styles.sheetActions}>
-              <Button
-                size="lg"
-                onPress={() => { void repeat(actionsFor); }}
-                disabled={actionBusy || actionsFor.items.length === 0}
-              >
-                Repeat on today
-              </Button>
-              <Button
-                size="lg"
-                variant="danger"
-                onPress={() => { void remove(actionsFor); }}
-                disabled={actionBusy}
-              >
-                Delete
-              </Button>
-              <Button variant="ghost" onPress={closeActions} disabled={actionBusy}>Close</Button>
-            </View>
-            {actionError !== null ? <Text style={styles.sheetBad}>{actionError}</Text> : null}
-          </>
-        ) : null}
-      </Sheet>
+      <MealSheet
+        meal={openMeal}
+        busy={actionBusy}
+        error={actionError}
+        onRepeat={(meal) => { void repeat(meal); }}
+        onRemove={(meal) => { void remove(meal); }}
+        onClose={closeDetail}
+      />
     </Screen>
   );
-}
-
-/** Enough of the meal to be sure you are deleting the right one. */
-function asTitle(meal: MealDto): string {
-  const summary = mealSummaryLine(meal);
-  return summary.length > 42 ? `${summary.slice(0, 41)}…` : summary;
 }

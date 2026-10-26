@@ -205,9 +205,27 @@ export function mealSummaryLine(meal: MealDto): string {
 /**
  * How many item names a row shows before it starts counting instead.
  *
- * Four fits two lines at 14pt on the narrowest phone with room for the tail.
+ * Four fits two lines at 14pt on the narrowest phone with room for the tail —
+ * provided the four are short, which is what `MEAL_NAMES_CHARS` is for.
  */
 export const MEAL_NAMES_SHOWN = 4;
+
+/**
+ * The same budget again, in characters, because a count of four is only a
+ * two-line budget if the four names are short.
+ *
+ * 64 is derived rather than picked: an iPhone SE is 320pt wide, the screen and
+ * the card take 16pt of padding each side (64pt in total), and the system face
+ * at 14pt averages a shade under 7pt per character — so a line holds about 36
+ * characters and two hold about 72. The four names in the eleven-item test case
+ * are exactly 60 characters joined, which is why that case still shows four and
+ * is still bounded by the count rather than by this; what this catches is the
+ * case the count cannot, which is three names of thirty characters each. The
+ * tail is left out of the budget on purpose — "+8 more" only exists when at
+ * least one name has been dropped, which has already freed more room than the
+ * tail takes.
+ */
+export const MEAL_NAMES_CHARS = 64;
 
 /**
  * The same line, but bounded — "Eggs, Toast, Coffee, Rice +7 more".
@@ -228,11 +246,33 @@ export const MEAL_NAMES_SHOWN = 4;
  * the unbounded line (it truncates to a character budget of its own), and its
  * behaviour is pinned by existing tests.
  */
-export function mealNamesLine(meal: MealDto, max: number = MEAL_NAMES_SHOWN): string {
+export function mealNamesLine(
+  meal: MealDto,
+  max: number = MEAL_NAMES_SHOWN,
+  chars: number = MEAL_NAMES_CHARS,
+): string {
   const names = meal.items.map((i) => i.name.trim()).filter((n) => n !== "");
   if (names.length === 0) return mealSummaryLine(meal);
-  if (names.length <= max) return names.join(", ");
-  return `${names.slice(0, max).join(", ")} +${names.length - max} more`;
+
+  /*
+   * Two budgets, and the first name is exempt from both.
+   *
+   * "Grilled chicken breast, skin removed" is one item, and a meal whose only
+   * description is a single long name must render that name — "+0 more" is not
+   * a thing, and dropping it would leave the row describing nothing. So the
+   * loop always takes one, and only then starts counting.
+   */
+  const shown: string[] = [];
+  let used = 0;
+  for (const name of names) {
+    const cost = shown.length === 0 ? name.length : name.length + 2;
+    if (shown.length > 0 && (shown.length >= max || used + cost > chars)) break;
+    shown.push(name);
+    used += cost;
+  }
+
+  if (shown.length === names.length) return shown.join(", ");
+  return `${shown.join(", ")} +${names.length - shown.length} more`;
 }
 
 /**
@@ -245,6 +285,165 @@ export function mealNamesLine(meal: MealDto, max: number = MEAL_NAMES_SHOWN): st
 export function mealSlotLine(meal: MealDto): string {
   const n = meal.items.length;
   return n > 1 ? `${meal.slot} · ${n} items` : meal.slot;
+}
+
+// -------------------------------------------------------------- the breakdown
+
+/**
+ * One item as the detail sheet draws it.
+ *
+ * `macros` is nullable and that is the one-item case, not an oversight: see
+ * `mealDetail`.
+ */
+export interface MealItemRow {
+  key: string;
+  name: string;
+  /** "3 large", "200 g", "1" — the portion the estimate was made against. */
+  portion: string | null;
+  /** The same line the meal total uses, so the two read as one column. */
+  macros: string | null;
+}
+
+/**
+ * Everything the meal detail sheet draws, with no decisions left in the view.
+ *
+ * The owner's complaint was that a row saying "+2 more" had no way to show the
+ * two: `MealDto.items` has carried every name, portion and macro since the
+ * route was written, and nothing rendered them. This is that view, as data.
+ */
+export interface MealDetail {
+  /** "Dinner · 6 items" — the sheet's own title. */
+  title: string;
+  /** The meal's stored totals. The headline figure, and the authority. */
+  total: string;
+  /** Where these numbers came from, or null for a source we have no words for. */
+  source: string | null;
+  items: MealItemRow[];
+  /** Said only when the column does not add up to the headline. */
+  footnote: string | null;
+  /** The sentence the user typed, or the note a photo was given. */
+  note: string | null;
+  /** Non-null instead of `items` when the meal saved no breakdown at all. */
+  empty: string | null;
+}
+
+export function itemTotals(item: MealItemDto): MacroTotals {
+  return { kcal: item.kcal, proteinG: item.proteinG, carbsG: item.carbsG, fatG: item.fatG };
+}
+
+/**
+ * "3 large", "200 g", "1".
+ *
+ * Null rather than an empty string when there is no quantity: the row omits the
+ * line entirely rather than reserving a blank one, and a caller cannot
+ * accidentally render `" "` as a portion.
+ */
+export function mealItemPortion(item: MealItemDto): string | null {
+  if (item.qty === null || !Number.isFinite(item.qty)) return null;
+  // The model emits fractional quantities ("1.5 cups"); 0.5 must not round to
+  // "1" and 3 must not render as "3.0".
+  const qty = Math.round(item.qty * 100) / 100;
+  const unit = item.unit !== null && item.unit.trim() !== "" ? ` ${item.unit.trim()}` : "";
+  return `${qty}${unit}`;
+}
+
+/**
+ * The sheet's title. Sentence case, unlike `mealSlotLine`, which feeds a
+ * `<Label>` and is uppercased by the type style rather than by the string.
+ *
+ * The item count is on the title and NOT a truncated name list, which is what
+ * this title used to be: the names are now in full twenty points below it, and
+ * a clipped copy of them above would be the same information twice with the
+ * worse version on top.
+ */
+export function mealDetailTitle(meal: MealDto): string {
+  const slot = meal.slot.trim();
+  const name = slot === "" ? "Meal" : slot[0].toUpperCase() + slot.slice(1);
+  const n = meal.items.length;
+  return n > 1 ? `${name} · ${plural(n, "item")}` : name;
+}
+
+/**
+ * Where a meal's numbers came from, which is the context that makes them worth
+ * arguing with.
+ *
+ * The confidence is the model's own, shown as a percentage because it is the
+ * model's claim about itself and rounding it into "high"/"low" would be us
+ * restating someone else's uncertainty. It is dropped for a repeat: those
+ * figures were corrected by a person once, and `FoodScreen.repeat` deliberately
+ * posts `confidence: null` for exactly that reason.
+ */
+export function mealSourceLine(meal: MealDto): string | null {
+  const base =
+    meal.source === "photo" ? "Photo estimate"
+      : meal.source === "text" ? "From what you typed"
+        : meal.source === "repeat" ? "Repeated from an earlier meal"
+          : meal.source === "manual" ? "Entered by hand"
+            : null;
+  if (base === null) return null;
+  if (meal.confidence === null || !Number.isFinite(meal.confidence)) return base;
+  return `${base} · ${Math.round(meal.confidence * 100)}% confident`;
+}
+
+/**
+ * The column against the headline.
+ *
+ * `POST /api/meals` rounds the meal's `kcal` and stores each item's as a
+ * numeric, so a six-item meal of x.4s can display a column that sums a few
+ * short of the figure above it. That is a small discrepancy and a large trust
+ * problem — this view exists so the owner can check a number, and a column that
+ * does not add up reads as the app being wrong about both. So it is said out
+ * loud, in the same place, whenever it is more than a rounding tick.
+ *
+ * Sums the ROUNDED item figures, not the raw ones: the claim being checked is
+ * the one the user can make with the digits on screen.
+ */
+export function itemsFootnote(meal: MealDto): string | null {
+  if (meal.items.length === 0) return null;
+  const sum = meal.items.reduce((a, i) => a + Math.round(i.kcal), 0);
+  const total = Math.round(meal.kcal);
+  if (Math.abs(sum - total) <= 1) return null;
+  return `These items add to ${sum} kcal; the meal was saved as ${total}.`;
+}
+
+export function mealDetail(meal: MealDto): MealDetail {
+  const footnote = itemsFootnote(meal);
+
+  /*
+   * A one-item meal's item line IS the meal total, and drawing the same
+   * "1683 kcal · 112p 164c 61f" twice forty points apart reads as a bug rather
+   * than as a breakdown. So the item keeps its name and portion and loses its
+   * macros — but only while the two genuinely agree. If `itemsFootnote` has
+   * something to say they do not agree, and then both figures have to be
+   * visible or the footnote is talking about a number that is not on screen.
+   */
+  const foldSingle = meal.items.length === 1 && footnote === null;
+
+  return {
+    title: mealDetailTitle(meal),
+    total: formatMacroLine(mealTotals(meal)),
+    source: mealSourceLine(meal),
+    items: meal.items.map((item, i) => ({
+      // Index, not name: item names collide routinely ("Olive oil" twice) and
+      // this list is read-only, so the index is stable for as long as it exists.
+      key: `item-${i}`,
+      // The same fallback `toAnalyzed` writes on save, so a blank name reads
+      // the same whichever side of the boundary it was blanked on.
+      name: item.name.trim() === "" ? "Item" : item.name.trim(),
+      portion: mealItemPortion(item),
+      macros: foldSingle ? null : formatMacroLine(itemTotals(item)),
+    })),
+    footnote,
+    note: meal.note.trim() === "" ? null : meal.note.trim(),
+    empty: meal.items.length === 0
+      ? "No item breakdown was saved for this meal — only its totals."
+      : null,
+  };
+}
+
+/** "1 item" / "6 items". */
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
 /**

@@ -159,3 +159,34 @@ describe("barHeightPct", () => {
     expect(barHeightPct(100, 0)).toBe(8);
   });
 });
+
+/**
+ * The cue on the detail screen.
+ *
+ * `GET /api/mobile/exercise?id=` has returned this field since the cue backend
+ * landed, and nothing consumed it — the route's comment claimed this screen
+ * rendered it while the screen had no reference to the field. These pin the
+ * consumption so it cannot quietly fall out again.
+ */
+describe("the carry-forward cue", () => {
+  it("carries the owner's own words through, line breaks and all", () => {
+    const v = buildExerciseView(payload({ cue: "elbows tucked\npause on chest" }));
+    expect(v.cue).toBe("elbows tucked\npause on chest");
+  });
+
+  it("is null when this lift has no cue", () => {
+    expect(buildExerciseView(payload({ cue: null })).cue).toBeNull();
+  });
+
+  it("is null when the server predates the field entirely", () => {
+    // The field is optional on the wire type. `undefined` reaching a <Text>
+    // renders nothing but is not something to rely on.
+    expect(buildExerciseView(payload()).cue).toBeNull();
+  });
+
+  it("folds an empty string to null rather than drawing an empty block", () => {
+    // The server never stores "" — absence is its only representation of "no
+    // cue" — so if one arrives it means the same thing.
+    expect(buildExerciseView(payload({ cue: "" })).cue).toBeNull();
+  });
+});

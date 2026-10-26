@@ -1,9 +1,10 @@
+import { useEffect, useState } from "react";
 import { Animated, Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Button } from "./Button";
 import { Label } from "./Label";
-import { BACKSPACE, applyKey, displayValue, padKeys } from "./keypad";
+import { BACKSPACE, applyFirstKey, applyKey, displayValue, padKeys } from "./keypad";
 import { color, radius, space, tnum } from "./tokens";
 import { useSlideIn } from "./useSlideIn";
 
@@ -29,6 +30,22 @@ const styles = StyleSheet.create({
   value: { ...tnum, color: color.ink, fontSize: 34, fontWeight: "600" },
   /** An untouched field shows a muted zero, so "0" typed is not "0" assumed. */
   valueEmpty: { color: color.muted },
+  /** The lb/kg toggle, sitting on the figure's baseline. */
+  units: { flexDirection: "row", marginLeft: "auto", gap: 2 },
+  unitKey: {
+    minWidth: 44,          // iOS touch target; this is tapped mid-set.
+    paddingVertical: 6,
+    borderRadius: radius.sm,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  unitKeyOn: { backgroundColor: color.accentSoft },
+  unitKeyText: { ...tnum, color: color.muted, fontSize: 14, fontWeight: "600" },
+  unitKeyTextOn: { color: color.accentInk },
+
+  /** "44 lb" under a kg figure. Muted: it is a reading, not the entry. */
+  equivalent: { ...tnum, color: color.muted, fontSize: 14, marginTop: 2 },
+
   unit: { color: color.muted, fontSize: 16 },
 
   grid: { borderTopWidth: 1, borderColor: color.line },
@@ -70,6 +87,13 @@ const styles = StyleSheet.create({
  * "untouched, use the suggestion" rather than 0 lb, and only the caller knows
  * that. The string is always something `Number()` can read; see `keypad.ts`.
  *
+ * The one piece of state it keeps is whether the figure on screen is still the
+ * PREFILL the caller opened with, because the first digit replaces a prefill
+ * rather than appending to it — see `applyFirstKey`. That is selection state,
+ * not value state: a text field tracks its own selection too, and the value is
+ * still entirely the caller's. Keeping it here rather than in the five screens
+ * that open this pad is also the only way all five behave the same.
+ *
  * It fires no haptics, for the same reason `Button` does not: a key press, a
  * save and a cancel should not feel alike, and only the feature knows which is
  * which. Call `tapSelect()` from `onChange` and `tapSave()` from `onDone`.
@@ -80,6 +104,8 @@ export function NumberPad({
   label,
   unit,
   allowDecimal = false,
+  units,
+  equivalent,
   onChange,
   onDone,
   onCancel,
@@ -93,12 +119,44 @@ export function NumberPad({
   unit?: string;
   /** Weight and bodyweight: true. Reps: false. */
   allowDecimal?: boolean;
+  /**
+   * Offer a unit choice beside the figure. Omit it for anything with one unit
+   * — reps, macros — which then renders exactly as before.
+   */
+  units?: {
+    options: readonly string[];
+    value: string;
+    onChange: (next: string) => void;
+  };
+  /**
+   * The muted line under the figure: what was typed, in the other unit. The
+   * caller computes it, because only the caller knows what the figure means.
+   */
+  equivalent?: string | null;
   onChange: (next: string) => void;
   onDone: () => void;
   onCancel: () => void;
 }) {
   const insets = useSafeAreaInsets();
   const { mounted, onPanelLayout, backdropStyle, panelStyle } = useSlideIn(visible);
+
+  /*
+   * Reset on OPEN rather than on a change of `value`.
+   *
+   * The caller sets the prefill and opens the pad in the same batch, so there
+   * is no separate "the value changed" moment to hang this on — and hanging it
+   * on `value` would re-arm the replace every time the caller echoed a digit
+   * back, which is every keystroke. An open is the only event that means "this
+   * figure is a suggestion, not something you typed".
+   *
+   * `visible` is also what every caller flips between two fields: the weight
+   * pad closes before the reps pad opens, because the control that opens
+   * either one is behind this modal.
+   */
+  const [replacing, setReplacing] = useState(true);
+  useEffect(() => {
+    if (visible) setReplacing(true);
+  }, [visible]);
 
   if (!mounted) return null;
 
@@ -127,7 +185,48 @@ export function NumberPad({
                 {displayValue(value)}
               </Text>
               {unit ? <Text style={styles.unit}>{unit}</Text> : null}
+
+              {/*
+                * The unit toggle, only when the caller offers a choice. Reps
+                * and macros have one unit and get no control.
+                *
+                * It RELABELS rather than converts: tapping `kg` with "20"
+                * typed means twenty kilograms, not forty-four. See the note in
+                * `weight-entry.ts` — reaching for this control is usually the
+                * moment you notice the unit is wrong, so reinterpreting is
+                * what you meant.
+                */}
+              {units ? (
+                <View style={styles.units}>
+                  {units.options.map((option) => {
+                    const active = option === units.value;
+                    return (
+                      <Pressable
+                        key={option}
+                        // Haptics are the caller's job here, as they are for
+                        // every other key on this pad.
+                        onPress={() => { if (!active) units.onChange(option); }}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: active }}
+                        accessibilityLabel={`Enter in ${option === "kg" ? "kilograms" : "pounds"}`}
+                        style={[styles.unitKey, active && styles.unitKeyOn]}
+                      >
+                        <Text style={[styles.unitKeyText, active && styles.unitKeyTextOn]}>
+                          {option}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              ) : null}
             </View>
+
+            {/*
+              * What you typed, in the other unit. Always visible once there is
+              * a figure, so the toggle never has to do two jobs — and so the
+              * owner can see "44 lb" while typing against a 20 kg stack.
+              */}
+            {equivalent ? <Text style={styles.equivalent}>{equivalent}</Text> : null}
           </View>
 
           <View style={styles.grid}>
@@ -145,7 +244,16 @@ export function NumberPad({
                   return (
                     <Pressable
                       key={key}
-                      onPress={() => onChange(applyKey(value, key, allowDecimal))}
+                      onPress={() => {
+                        onChange(
+                          replacing
+                            ? applyFirstKey(value, key, allowDecimal)
+                            : applyKey(value, key, allowDecimal),
+                        );
+                        // Every real key ends it, backspace included: after 220
+                        // becomes 22, the next digit has to append.
+                        setReplacing(false);
+                      }}
                       accessibilityRole="button"
                       accessibilityLabel={isBackspace ? "Delete" : key}
                       style={({ pressed }) => [

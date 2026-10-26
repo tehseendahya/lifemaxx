@@ -1,10 +1,10 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
-import { color, radius, space, tnum } from "@/components/ui";
+import { Segmented, color, radius, space, tnum } from "@/components/ui";
+import type { Segment } from "@/components/ui";
 import { microLabel } from "@/components/ui/Label";
 import { tapSelect } from "@/lib/haptics";
-import { Segmented } from "./Segmented";
-import type { Segment } from "./Segmented";
+import { ROW_WIDTHS } from "./row-widths";
 import {
   fmtWeight,
   implausible,
@@ -26,23 +26,85 @@ export const LINE_HEIGHT = 56;
  * Column widths, which have to add up — and the arithmetic is the reason they
  * are these numbers rather than rounder ones.
  *
- * 70 + 54 + 30 + 32 + 30 + 44 + 44 = **304pt**. The tightest case in the app is
- * a 360pt-wide phone (iPhone 12/13 mini) showing a *marked* group: 360 − 32 for
- * the sheet's gutters − 12 for the group's left border inset = 316pt. That
- * leaves 12pt for the flexible spacer, and the line cannot overflow. A fixed
- * 2pt gap between all seven children would have cost 14pt and clipped the
- * delete button off the right edge of that phone, which is the sort of thing
- * that is invisible until someone holds one.
+ * ── THE BUG THESE NUMBERS FIX ──────────────────────────────────────────────
  *
- * They are fixed rather than flexed so that fifteen lines form actual columns:
- * a weight that shifts left because the reps beside it went from 5 to 12 is the
- * same jitter tabular numerals exist to prevent, one level up.
+ * The owner put RPE 10 on a set and the badge rendered as `@1` on one line and
+ * `0` on the next, shoving the controls beside it out of the row. The RPE cell
+ * was **32pt**. `@10` in SF at 15pt measures about 31pt — roughly thirteen for
+ * the `@` and nine per tabular digit — so the cell was sized to within a point
+ * of the widest value the control can produce, and anything that moved that
+ * measurement at all pushed it over. React Native scales text with Dynamic
+ * Type (`allowFontScaling` defaults to true) and does not
+ * scale a `width`, so a cell sized to a glyph's exact measurement is a cell
+ * that breaks on the first notch of the iOS text slider. That is the actual
+ * defect: not that 32 was one point short, but that every fixed cell here was
+ * sized for one text size and the row had no slack to absorb another.
  *
- * The three narrow affordances are under 44pt wide and carry `hitSlop` to clear
- * the floor — the rule is about what a thumb can hit, not what is painted, and
- * the 56pt line height already gives them the other axis.
+ * So the budget below is computed for the widest LEGAL value in each column at
+ * `COMPACT_SCALE_CAP` (1.2×), not at 1.0×:
+ *
+ *   weight  66  `1500` (MAX_PLAUSIBLE_LB, 4 digits) + `lb` at 1.0× needs 62,
+ *               and a 3-digit weight — every real one — needs 61 at 1.2×.
+ *   reps    52  `× 50` (MAX_PLAUSIBLE_REPS) needs 50 at 1.2×.
+ *   kind    30  one glyph.
+ *   rpe     46  and the widest value here is NOT `@10`. `rpeChoices` keeps a
+ *               half step the parser produced — `@7.5` is a legal RPE and a
+ *               real `sets.rpe` value — so the cell is sized for four glyphs
+ *               at 1.2×, not three. Sizing a cell to the exact measurement of
+ *               the value you happened to think of is how this broke once
+ *               already.
+ *   note    30  one dot.
+ *   icon    38  ×2, `⊕` and `×`.
+ *
+ * 66 + 52 + 30 + 46 + 30 + 38 + 38 = **300pt**, and the flexible spacer takes
+ * whatever is left. The tightest frame the app has to survive is a 360pt
+ * viewport showing a *marked* group: 360 − 32 for the sheet's gutters − 12 for
+ * the group's left border inset = 316pt, leaving 16pt of spacer. (360 is an
+ * Android width and is narrower than any iPhone this build runs on — the
+ * narrowest of those is 375pt, an SE or an 8; the note that used to be here
+ * called a 12/13 mini 360pt and it is 375. Designing to 360 anyway costs
+ * nothing and the number is no longer load-bearing, since the row now has
+ * slack instead of exactly none.)
+ *
+ * The RPE cell gained 14pt and every point of it was paid for: 6pt from each
+ * icon button (44 → 38), 4pt from the weight column and 2pt from reps, both of
+ * which were sized past anything they can legally hold. The row got 4pt
+ * narrower overall, from 304 to 300.
+ *
+ * The two icons now carry `hitSlop` to stay above the 44pt floor, the same
+ * trade the kind badge and the note dot already make: the rule is about what a
+ * thumb can hit, not what is painted, and the 56pt line height gives all four
+ * the other axis outright. Every column keeps at least 2pt of margin over its
+ * widest legal value at 1.2×, so none of them is one re-measurement away from
+ * being the bug this was.
+ *
+ * The widths are fixed rather than flexed so that fifteen lines form actual
+ * columns: a weight that shifts left because the reps beside it went from 5 to
+ * 12 is the same jitter tabular numerals exist to prevent, one level up.
  */
-const W = { weight: 70, reps: 54, kind: 30, rpe: 32, note: 30, icon: 44 } as const;
+// The one source of truth, in a module the node test config can import.
+// `row-widths.test.ts` guards the RPE cell against the regression that
+// shipped; keeping the numbers here as well would let the two drift.
+const W = ROW_WIDTHS;
+
+/**
+ * How far the system text slider may scale the figures and badges on this row.
+ *
+ * Capping font scaling is a real cost and it is taken deliberately, in exactly
+ * one place: seven cells of fixed point width sitting in a row that is 300pt
+ * wide on a 316pt frame cannot absorb the 3.1× the accessibility slider goes
+ * to, and the failure mode is not "small text", it is the row folding over
+ * itself and burying the delete button — which is what the owner photographed.
+ * 1.2× is the largest multiplier every column above still fits at.
+ *
+ * Nothing else in the sheet is capped. The exercise names, the `heard:`
+ * evidence, the cue, the blocked reasons, the source quote and every button
+ * label scale without limit, and the figures stay legible because 18pt
+ * semibold at 1.2× is 21.6pt. A user who needs more than that needs the figure
+ * read out, and every cell on this row carries an `accessibilityLabel` that
+ * does exactly that.
+ */
+const COMPACT_SCALE_CAP = 1.2;
 
 const styles = StyleSheet.create({
   root: { borderBottomWidth: 1, borderBottomColor: color.line },
@@ -59,20 +121,33 @@ const styles = StyleSheet.create({
   // Two levels, because the two alignments are on different axes: the outer box
   // centres the pair vertically in the 56pt line, and the inner row puts the
   // unit on the figure's baseline rather than on its centre.
-  figure: { height: LINE_HEIGHT, justifyContent: "center" },
+  /**
+   * `flexShrink: 1` is the structural backstop under `W`'s arithmetic.
+   *
+   * Every other child of the line is fixed-width and React Native does not
+   * shrink those by default, so if the budget were ever wrong — a narrower
+   * frame, a column widened without re-checking the sum — the controls would
+   * walk off the right edge silently. The figures are the one pair that can
+   * give width back without losing an affordance (they have
+   * `adjustsFontSizeToFit`, so they get smaller rather than clipping), so they
+   * are the ones allowed to. At 360pt and above this never engages.
+   */
+  figure: { height: LINE_HEIGHT, justifyContent: "center", flexShrink: 1 },
   figureInner: { flexDirection: "row", alignItems: "baseline", gap: 3 },
   figurePressed: { opacity: 0.55 },
   value: { ...tnum, color: color.ink, fontSize: 18, fontWeight: "600" },
   valueBad: { color: color.bad },
   unit: { ...microLabel, marginBottom: 0, color: color.muted },
 
-  spacer: { flex: 1 },
+  // `minWidth` so the figures and the controls never actually touch: the
+  // figures shrink into it rather than it closing to zero. See `styles.figure`.
+  spacer: { flex: 1, minWidth: space.sm },
 
   /**
    * 30pt wide and 56pt tall, with horizontal `hitSlop` taking the effective
-   * target past the 44pt floor. A 44pt-wide badge here would cost 14pt that the
-   * weight column needs more, and the rule is about what the thumb can hit, not
-   * what is painted.
+   * target past the 44pt floor. A 44pt-wide badge here would cost 14pt the RPE
+   * and weight columns need more, and the rule is about what the thumb can hit,
+   * not what is painted.
    */
   badge: {
     width: W.kind,
@@ -200,10 +275,27 @@ export function SetLine({
           style={({ pressed }) => [styles.figure, { width: W.weight }, pressed && styles.figurePressed]}
         >
           <View style={styles.figureInner}>
-            <Text style={[styles.value, offending === "weight" && styles.valueBad]}>
+            {/*
+              `adjustsFontSizeToFit` is not here for any legal weight — the
+              column is sized for all of those at `COMPACT_SCALE_CAP`. It is
+              for the implausible one: the pad will accept `99999`, and such a
+              row already blocks the confirm button and draws its figure in
+              `color.bad`, so the honest rendering is a number that got smaller
+              rather than a row that wrapped into two lines. `numberOfLines`
+              is what makes that possible and is the hard floor under it.
+            */}
+            <Text
+              style={[styles.value, offending === "weight" && styles.valueBad]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.7}
+              maxFontSizeMultiplier={COMPACT_SCALE_CAP}
+            >
               {fmtWeight(row.weightLb)}
             </Text>
-            <Text style={styles.unit}>lb</Text>
+            <Text style={styles.unit} numberOfLines={1} maxFontSizeMultiplier={COMPACT_SCALE_CAP}>
+              lb
+            </Text>
           </View>
         </Pressable>
 
@@ -214,7 +306,13 @@ export function SetLine({
           style={({ pressed }) => [styles.figure, { width: W.reps }, pressed && styles.figurePressed]}
         >
           <View style={styles.figureInner}>
-            <Text style={[styles.value, offending === "reps" && styles.valueBad]}>
+            <Text
+              style={[styles.value, offending === "reps" && styles.valueBad]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.7}
+              maxFontSizeMultiplier={COMPACT_SCALE_CAP}
+            >
               {`× ${row.reps}`}
             </Text>
           </View>
@@ -260,7 +358,11 @@ export function SetLine({
                   which is why the badge is empty for it rather than labelled
                   "WORKING" on every one of fifteen lines.
                 */}
-                <Text style={[styles.badgeText, kind === "failure" && styles.badgeTextFailure]}>
+                <Text
+                  style={[styles.badgeText, kind === "failure" && styles.badgeTextFailure]}
+                  numberOfLines={1}
+                  maxFontSizeMultiplier={COMPACT_SCALE_CAP}
+                >
                   {kind === "warmup" ? "W" : kind === "failure" ? "F" : ""}
                 </Text>
               </View>
@@ -280,9 +382,30 @@ export function SetLine({
               style={styles.rpe}
             >
               {row.rpe === null ? (
-                <Text style={styles.rpeEmpty}>RPE</Text>
+                <Text
+                  style={styles.rpeEmpty}
+                  numberOfLines={1}
+                  maxFontSizeMultiplier={COMPACT_SCALE_CAP}
+                >
+                  RPE
+                </Text>
               ) : (
-                <Text style={[styles.rpeText, offending === "rpe" && styles.rpeTextBad]}>
+                /*
+                  The cell the owner's screenshot broke. `numberOfLines={1}` is
+                  the invariant — this control has six legal answers and `@10`
+                  is one of them, so it must never become two lines whatever
+                  the text size is — and `W.rpe` is wide enough that it never
+                  has to clip to honour that. `adjustsFontSizeToFit` is
+                  deliberately absent: a `7.5` the parser produced is a legal
+                  value and must render at full size, and the alternative to
+                  shrinking the RPE was shrinking the icons beside it, which is
+                  what happened.
+                */
+                <Text
+                  style={[styles.rpeText, offending === "rpe" && styles.rpeTextBad]}
+                  numberOfLines={1}
+                  maxFontSizeMultiplier={COMPACT_SCALE_CAP}
+                >
                   {`@${row.rpe}`}
                 </Text>
               )}
@@ -306,7 +429,13 @@ export function SetLine({
                 accent dot says "there is something here" in the app's own voice
                 and the note itself is one tap away.
               */}
-              <Text style={row.note === "" ? styles.noteOff : styles.noteOn}>●</Text>
+              <Text
+                style={row.note === "" ? styles.noteOff : styles.noteOn}
+                numberOfLines={1}
+                maxFontSizeMultiplier={COMPACT_SCALE_CAP}
+              >
+                ●
+              </Text>
             </Pressable>
           </>
         )}
@@ -318,10 +447,13 @@ export function SetLine({
           }}
           accessibilityRole="button"
           accessibilityLabel={`Duplicate ${where}`}
-          hitSlop={4}
+          // 38pt painted, 46pt reachable. See `W`.
+          hitSlop={{ left: 4, right: 4 }}
           style={({ pressed }) => [styles.icon, pressed && styles.iconPressed]}
         >
-          <Text style={styles.iconText}>⊕</Text>
+          <Text style={styles.iconText} numberOfLines={1} maxFontSizeMultiplier={COMPACT_SCALE_CAP}>
+            ⊕
+          </Text>
         </Pressable>
 
         <Pressable
@@ -331,10 +463,16 @@ export function SetLine({
           }}
           accessibilityRole="button"
           accessibilityLabel={`Remove ${where}`}
-          hitSlop={4}
+          hitSlop={{ left: 4, right: 4 }}
           style={({ pressed }) => [styles.icon, pressed && styles.iconPressed]}
         >
-          <Text style={[styles.iconText, styles.iconDanger]}>×</Text>
+          <Text
+            style={[styles.iconText, styles.iconDanger]}
+            numberOfLines={1}
+            maxFontSizeMultiplier={COMPACT_SCALE_CAP}
+          >
+            ×
+          </Text>
         </Pressable>
       </View>
 

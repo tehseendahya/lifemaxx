@@ -305,7 +305,9 @@ Rule: **every notification must be actionable or it gets ignored.** "You ate 1,8
 - No praise unless it's a real PR or a streak that actually held. Manufactured encouragement trains you to skim.
 - Name the tradeoff when there is one — *"you can keep the deficit or keep adding weight to squats this month, probably not both."*
 - Never hedge. No "it might be worth considering." Say the thing or don't send the message.
-- **Say "not enough data" when there isn't any.** Under ~5 logged days in a window, the honest answer is that the trend is noise. A coach that pattern-matches on four days of data is worse than one that stays quiet, and this is the single easiest way for the whole feature to lose your trust.
+- **Never refuse; always caveat.** Revised after the owner's first week on a real phone. The original rule was *"say 'not enough data' when there isn't any — under ~5 logged days the honest answer is that the trend is noise"*, and the coach obeyed it literally: asked for thoughts on their goals and plan with one logged day, it answered *"1 logged day is too thin to evaluate your eating or lifting plan"*, and when pushed for an analysis anyway, *"1 logged day is too thin to call."* Two non-answers to a question that needed no history at all — the goals text alone (205 bench by December, 10 weighted pull-ups by May, their split) is enough to coach a plan against.
+
+  What survives is the part that was right: **no trend claim from a thin sample.** Under ~5 logged days the coach may not call a trend, a plateau, a stall, or a response to a change. What changes is where the uncertainty goes — **into the claim, not instead of it.** The sample size is stated in the same sentence as the number ("across 2 logged days"), general training knowledge is allowed and is marked once with "Generally,", and every question gets a real answer. The prompt is told which streams are thin by a `DATA COVERAGE` block computed in code, per stream, so the caveat is measured rather than guessed. See `COACH_VOICE` and `coverageBlock` in `src/lib/llm/prompts.ts`.
 
 ### 5.5 Adaptive TDEE — the highest-value feature you didn't ask for
 

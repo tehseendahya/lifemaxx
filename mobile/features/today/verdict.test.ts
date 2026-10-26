@@ -18,31 +18,28 @@ const owedLowerBody = [
   ranked({ muscle: "hamstring", label: "Hamstrings", score: 0.8, daysSinceTrained: 9 }),
 ];
 
-describe("rung 1 — thin data", () => {
-  it("admits the data is too thin under five lift days and stops", () => {
-    const b = bootstrap({
-      history: { days: liftHistory().slice(0, 4), mainLifts: [] },
-    });
+describe("rung 1 — nothing logged", () => {
+  it("names what is missing and what appears once it is there", () => {
+    const b = bootstrap({ history: { days: [], mainLifts: [] } });
     expect(verdict(b)).toEqual({
-      text: "Not enough data to call it — 4 lift days in four weeks. "
-        + "Log a session and this gets useful.",
+      text: "No sessions logged in four weeks. Log one and this line names the muscle "
+        + "you owe the most sets to.",
       tone: "ink",
     });
   });
 
-  it("singularises one day", () => {
-    const b = bootstrap({ history: { days: [day("2026-10-24", { hardSets: 9 })], mainLifts: [] } });
-    expect(verdict(b).text).toContain("1 lift day in four weeks");
+  it("treats a day with only warmups as no session", () => {
+    // `liftDaysIn` counts days with working sets; hardSets 0 is not a lift day.
+    const b = bootstrap({ history: { days: [day("2026-10-24")], mainLifts: [] } });
+    expect(verdict(b).text).toContain("No sessions logged");
   });
 
   it("counts only days inside the 28-day window", () => {
-    // Eight lift days, but seven of them are older than four weeks.
-    const old = ["2026-08-01", "2026-08-03", "2026-08-05", "2026-08-07",
+    // Seven lift days, every one of them older than four weeks.
+    const stale = ["2026-08-01", "2026-08-03", "2026-08-05", "2026-08-07",
       "2026-08-09", "2026-08-11", "2026-08-13"].map((d) => day(d, { hardSets: 18 }));
-    const b = bootstrap({
-      history: { days: [...old, day("2026-10-24", { hardSets: 18 })], mainLifts: [] },
-    });
-    expect(verdict(b).text).toContain("1 lift day");
+    const b = bootstrap({ history: { days: stale, mainLifts: [] } });
+    expect(verdict(b).text).toContain("No sessions logged");
   });
 
   it("outranks an active session and an interference hit", () => {
@@ -52,7 +49,33 @@ describe("rung 1 — thin data", () => {
       runs: [run({ sufferScore: 95 })],
       lowerBodyLiftDates: ["2026-10-24"],
     });
-    expect(verdict(b).text).toContain("Not enough data");
+    expect(verdict(b).text).toContain("No sessions logged");
+  });
+
+  /*
+   * The regression that motivated dropping this floor from five days to one.
+   * The owner had logged exactly one session and every surface on Today read as
+   * an apology. Volume debt is a count, not a trend, so one day is enough to
+   * rank from — and the rung above must not swallow it.
+   */
+  it("hands one logged day straight to the volume-debt rung", () => {
+    const b = bootstrap({
+      history: { days: [day("2026-10-24", { hardSets: 9 })], mainLifts: [] },
+    });
+    expect(verdict(b).text).toBe(
+      "Rear Delts are 10 sets short this week and you last hit them 9 days ago. "
+      + "Train Rear Delts.",
+    );
+  });
+
+  it("lets four logged days reach interference, which used to be unreachable", () => {
+    const b = bootstrap({
+      history: { days: liftHistory().slice(0, 4), mainLifts: [] },
+      runs: [run({ sufferScore: 95 })],
+      lowerBodyLiftDates: ["2026-10-24"],
+    });
+    expect(verdict(b).tone).toBe("warn");
+    expect(verdict(b).text).toContain("You ran hard yesterday.");
   });
 });
 

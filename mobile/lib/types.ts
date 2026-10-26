@@ -159,6 +159,24 @@ export interface Bootstrap {
   catalogue: CatalogueExercise[];
   lastSets: Record<string, LastSet>;
   /**
+   * Carry-forward cues, keyed by exercise id.
+   *
+   * "Elbows tucked, pause on chest" on the bench press, written once and shown
+   * every time that lift is logged. Not `sets.note`, which is one line about
+   * one set in one session; this is the thing the owner asked for when they
+   * said there was nowhere to put notes per exercise.
+   *
+   * Lifts without a cue are ABSENT rather than present as `""`, the same rule
+   * `lastSets` follows — so `cues[id] === undefined` is the single answer to
+   * "is there a cue here", and no consumer has to know that an empty string
+   * means the same thing for a different reason.
+   *
+   * It is in `bootstrap` so a cue is on screen in a basement with no signal.
+   * Optional because a server that predates it sends nothing, and an absent
+   * map must render as no cues rather than as a crash.
+   */
+  cues?: Record<string, string>;
+  /**
    * 56 days of bodyweight, intake and working-set counts, plus up to three
    * e1RM series. Raw, like `runs`: every streak, weekly bucket and rolling
    * mean the Today screen draws is a pure function in `features/today/model.ts`
@@ -216,6 +234,13 @@ export interface ExerciseHistory {
     equipment: string;
   };
   history: { date: string; sets: HistorySet[] }[];
+  /**
+   * This lift's carry-forward cue, or null. Same value as `bootstrap`'s
+   * `cues[id]`, re-sent here because this is the screen that edits it: a
+   * screen that can change a field has to read it from the request that
+   * renders it, or its save and the next bootstrap are two sources of truth.
+   */
+  cue?: string | null;
   /** Best across the returned window, not all time. */
   bestE1rmLb: number | null;
 }
@@ -373,4 +398,29 @@ export interface SetWrite {
   note?: string;
   /** What was spoken or typed, kept verbatim in `sets.raw_text` so a mangled parse can be revisited. */
   rawText?: string;
+}
+
+/**
+ * The body of `POST /api/mobile/exercise/cue`.
+ *
+ * One call writes, replaces and clears: `cue: ""` (or anything that is only
+ * whitespace) deletes the cue, because the absence of a row is the only
+ * representation of "no cue" there is. The response echoes the cue AS STORED
+ * — the server trims the ends and normalises line breaks, so it is not always
+ * the string that was sent, and rendering the local input instead would show
+ * something the next bootstrap disagrees with.
+ *
+ * Idempotent: the write upserts on (user, exercise), so a double-tapped save,
+ * a retry after a lost response, or the outbox replaying a queued copy all
+ * land on one row with the last write winning.
+ */
+export interface CueWrite {
+  exerciseId: string;
+  cue: string;
+}
+
+export interface CueResponse {
+  exerciseId: string;
+  /** Null when the cue was cleared. */
+  cue: string | null;
 }

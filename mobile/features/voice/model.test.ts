@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   COUNTDOWN_MS,
+  MAX_CUE_LENGTH,
   MAX_PLAUSIBLE_LB,
   MAX_PLAUSIBLE_REPS,
   MAX_RECORD_MS,
@@ -12,6 +13,9 @@ import {
   confirmLabel,
   countdownLabel,
   createdExerciseIds,
+  cueError,
+  cueFor,
+  cueQueueId,
   deleteGroup,
   deleteRow,
   duplicateRow,
@@ -25,19 +29,24 @@ import {
   leadingWarmups,
   markFirstWarmups,
   meterLevel,
+  normaliseCue,
   offendingField,
   padToPatch,
+  parseHint,
   patchGroup,
   patchRow,
   payloadsFor,
   refileEntry,
   rowsFromParse,
+  shouldQueueCue,
   rpeChoices,
   rpeSummary,
   setKind,
+  sourceDoorLabel,
   unmatchedQueries,
   type LogRow,
 } from "./model";
+import { classifyStatus } from "../../lib/shared/outbox";
 import type { ParseResponse } from "../../lib/types";
 
 /**
@@ -998,5 +1007,166 @@ describe("the recording readout", () => {
     const levels = [-45, -35, -25, -15, -5].map((db) => meterLevel(db, 5));
     expect(levels).toEqual([...levels].sort((a, b) => a - b));
     expect(new Set(levels).size).toBeGreaterThan(2);
+  });
+});
+
+describe("what read this", () => {
+  it("names the door, and the whole line is the tap target", () => {
+    expect(sourceDoorLabel("typed")).toBe("TYPED · TAP TO FIX");
+    expect(sourceDoorLabel("heard")).toBe("HEARD · TAP TO FIX");
+  });
+
+  /**
+   * The owner's complaint, as a test.
+   *
+   * `usedModel` is one boolean for the whole paste and it is true when the
+   * deterministic parser left ANY line over. The old copy said "READ BY THE
+   * MODEL", which claims every row came from the model — so a five-line paste
+   * whose four set lines parsed character for character got stamped as
+   * modelled because of the fifth. The replacement claims only what the flag
+   * supports: the model read the lines the parser could not. That sentence is
+   * true for one line of five and still true when the parser managed none of
+   * them, which is the property that makes it safe to print off a boolean.
+   */
+  it("never claims a model read more than the lines the parser could not", () => {
+    expect(parseHint("typed", true)).toBe("A MODEL READ THE LINES THE PARSER COULDN’T");
+    expect(parseHint("typed", true)).not.toMatch(/READ BY THE MODEL/);
+  });
+
+  it("says no model was involved, not that the network was not", () => {
+    // The parse is POST /api/sets/parse either way, so "READ WITHOUT THE
+    // NETWORK" was false on every paste it was ever printed on.
+    const hint = parseHint("typed", false);
+    expect(hint).toBe("NO MODEL · THE PARSER READ EVERY LINE");
+    expect(hint).not.toMatch(/NETWORK/);
+  });
+
+  it("owns up to the transcription on the mic path, which is always a model", () => {
+    // The old copy could print "READ WITHOUT THE NETWORK" under a transcript a
+    // model had just produced from audio that was uploaded to it.
+    expect(parseHint("heard", false)).toBe("A MODEL HEARD IT · THE PARSER READ EVERY SET");
+    expect(parseHint("heard", true)).toBe(
+      "A MODEL HEARD IT AND READ THE LINES THE PARSER COULDN’T",
+    );
+  });
+
+  it("mentions a model in every case where one touched the payload", () => {
+    for (const usedModel of [true, false]) {
+      expect(parseHint("heard", usedModel)).toMatch(/MODEL/);
+    }
+    expect(parseHint("typed", true)).toMatch(/A MODEL READ/);
+  });
+});
+
+describe("the carry-forward cue", () => {
+  const BENCH_ID = BENCH.id;
+
+  it("finds the cue for a resolved lift and nothing for one with none", () => {
+    expect(cueFor(BENCH_ID, { [BENCH_ID]: "Elbows tucked" })).toBe("Elbows tucked");
+    expect(cueFor(BENCH_ID, {})).toBeNull();
+  });
+
+  it("reads a server that predates the field as no cues rather than crashing", () => {
+    expect(cueFor(BENCH_ID, undefined)).toBeNull();
+  });
+
+  it("has nothing to look up for an unresolved or by-hand group", () => {
+    expect(cueFor(null, { [BENCH_ID]: "Elbows tucked" })).toBeNull();
+  });
+
+  /*
+   * These four mirror `normaliseCue` in `src/lib/cues.ts`. They exist on the
+   * phone only so the length check measures the string the SERVER will
+   * measure; if the two implementations ever drift, these are what catches it.
+   */
+  it("keeps the line breaks that separate two cues on one lift", () => {
+    expect(normaliseCue("Elbows tucked\nPause on chest")).toBe("Elbows tucked\nPause on chest");
+  });
+
+  it("trims the ends, normalises CRLF and strips trailing spaces per line", () => {
+    expect(normaliseCue("  Elbows tucked  \r\nPause on chest   \r\n  ")).toBe(
+      "Elbows tucked\nPause on chest",
+    );
+  });
+
+  it("collapses a run of blank lines to one blank line", () => {
+    expect(normaliseCue("Elbows tucked\n\n\n\nPause")).toBe("Elbows tucked\n\nPause");
+  });
+
+  it("reports an all-whitespace cue as empty, which is the request to clear it", () => {
+    expect(normaliseCue("   \n\n  \t ")).toBe("");
+  });
+
+  it("accepts a cue at exactly the ceiling and refuses the next character", () => {
+    expect(cueError("x".repeat(MAX_CUE_LENGTH))).toBeNull();
+    expect(cueError("x".repeat(MAX_CUE_LENGTH + 1))).toMatch(/241 characters/);
+    expect(cueError("x".repeat(MAX_CUE_LENGTH + 1))).toMatch(/240 or fewer/);
+  });
+
+  /**
+   * The reason this check normalises before counting rather than measuring the
+   * raw draft. A 240-character cue with a trailing newline is 241 raw and 240
+   * stored, so a raw check would refuse something the server stores happily —
+   * and the mirror image, a draft that normalises LONGER, cannot happen.
+   */
+  it("measures the cue the server will store, not the draft as typed", () => {
+    expect(cueError(`${"x".repeat(MAX_CUE_LENGTH)}\n\n   `)).toBeNull();
+  });
+
+  it("raises nothing for an empty cue, which is a legal clear rather than an error", () => {
+    expect(cueError("")).toBeNull();
+    expect(cueError("   ")).toBeNull();
+  });
+
+  /**
+   * Queueing a cue that the network, not the cue, is the problem with.
+   *
+   * The rule being pinned is not "queue on failure" — it is that the phone and
+   * the outbox classify a failure the SAME way. A cue accepted on screen and
+   * then dropped in the background by `flush()` would be the one outcome worse
+   * than refusing it outright, because the owner would have been told it saved.
+   */
+  describe("deciding whether a failed cue is worth queueing", () => {
+    it("queues a dead connection, which is the basement this exists for", () => {
+      // `ApiError` uses status 0 for a network failure and a timeout.
+      expect(shouldQueueCue(0)).toBe(true);
+    });
+
+    it("queues a server fault, which says nothing about the words", () => {
+      expect(shouldQueueCue(500)).toBe(true);
+      expect(shouldQueueCue(503)).toBe(true);
+    });
+
+    it("queues an expired session, because the cue is valid and will deliver", () => {
+      expect(shouldQueueCue(401)).toBe(true);
+    });
+
+    it("does NOT queue a cue the server refused on its merits", () => {
+      // Past the ceiling, and a lift this account cannot see. Both will be
+      // just as invalid in ten minutes, so the editor stays open instead.
+      expect(shouldQueueCue(400)).toBe(false);
+      expect(shouldQueueCue(404)).toBe(false);
+    });
+
+    it("agrees with the outbox about every status, which is the actual contract", () => {
+      for (const status of [0, 200, 400, 401, 403, 404, 408, 429, 500, 503]) {
+        expect(shouldQueueCue(status)).toBe(classifyStatus(status) === "retry");
+      }
+    });
+  });
+
+  describe("the queued cue's identity", () => {
+    it("is derived from the lift, so a second edit replaces the queued one", () => {
+      // `enqueue` keys the queue on this and the store's put is an upsert, so
+      // three edits in a basement leave ONE queued write carrying the last of
+      // them — not three deliveries of a cue that was wrong twice.
+      expect(cueQueueId(BENCH_ID)).toBe(cueQueueId(BENCH_ID));
+      expect(cueQueueId(BENCH_ID)).not.toBe(cueQueueId("other-id"));
+    });
+
+    it("cannot collide with a set, whose outbox id is its uuid client id", () => {
+      expect(cueQueueId(BENCH_ID)).toContain(BENCH_ID);
+      expect(cueQueueId(BENCH_ID).startsWith("cue-")).toBe(true);
+    });
   });
 });

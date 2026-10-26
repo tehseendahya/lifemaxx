@@ -10,6 +10,7 @@ import {
   getDailyHardSets, getMainLiftE1rmSeries, shiftDate, HISTORY_LOOKBACK_DAYS,
 } from "@/lib/queries";
 import { mergeHistoryDays } from "@/lib/history";
+import { getCues } from "@/lib/cues";
 import { summarize } from "@/lib/domain/readiness";
 import { displayLb } from "@/lib/domain/units";
 import { bestE1rm } from "@/lib/domain/e1rm";
@@ -41,7 +42,7 @@ export const GET = route(async ({ userId, tz, today }) => {
   const [
     profile, target, meals, volume, tdee, proteinFloor,
     active, runs, lowerBodyLiftDates, gymList, catalogueRows, lastSets,
-    weighInSeries, intakeSeries, hardSetDays, mainLiftSeries,
+    weighInSeries, intakeSeries, hardSetDays, mainLiftSeries, cues,
   ] = await Promise.all([
     getProfile(userId),
     getActiveTarget(userId, today),
@@ -80,6 +81,22 @@ export const GET = route(async ({ userId, tz, today }) => {
     getDailyIntake(userId, shiftDate(today, -HISTORY_LOOKBACK_DAYS)),
     getDailyHardSets(userId, today),
     getMainLiftE1rmSeries(userId, today),
+
+    /*
+     * The per-exercise cues, for the same reason `lastSets` is here: a cue is
+     * worthless if it is not on screen in the basement, and this is the one
+     * round trip the phone gets on the way in.
+     *
+     * It is the cheapest read in this list. `user_id` is the leading column of
+     * `exercise_cues`'s composite primary key and the only predicate, and the
+     * result is one row per lift the owner has actually written a cue for — a
+     * handful, not a catalogue. Measured against the local Postgres with the
+     * RLS policy in play: 0.022 ms, one buffer hit, and the policy collapses
+     * to a one-time filter rather than a per-row test. Being inside this
+     * `Promise.all` rather than appended to it is what keeps that cost off the
+     * launch-blocking critical path entirely.
+     */
+    getCues(userId),
   ]);
 
   const muscleMap = await muscleMapFor(catalogueRows.map((row) => row.id));
@@ -141,6 +158,13 @@ export const GET = route(async ({ userId, tz, today }) => {
       muscles: muscleMap.get(row.id) ?? [],
     })),
     lastSets,
+
+    /**
+     * Carry-forward cues, keyed by exercise id. Lifts without one are ABSENT
+     * rather than present as `""`, the same rule `lastSets` follows — so
+     * `cues[id] === undefined` is the single answer to "is there a cue here".
+     */
+    cues,
 
     history: {
       days: mergeHistoryDays(weighInSeries, intakeSeries, hardSetDays),

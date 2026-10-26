@@ -27,12 +27,18 @@ const styles = StyleSheet.create({
     fontSize: 17,
     lineHeight: 23,
   },
+  inputBad: { borderColor: color.bad },
+
+  footnote: { color: color.muted, fontSize: 12, lineHeight: 18, marginTop: space.sm },
+  problem: { color: color.bad, fontSize: 13, lineHeight: 19, marginTop: space.sm },
+
   save: { marginTop: space.md },
   clear: { marginTop: space.sm },
 });
 
 /**
- * A short piece of prose, typed and returned. Used for set notes.
+ * A short piece of prose, typed and returned. Used for set notes and for the
+ * carry-forward exercise cue.
  *
  * **Full-screen `Modal`, not a `Sheet`, and that is the whole point.** An RN
  * `Modal`'s contents do not move for the keyboard, so a panel anchored to the
@@ -50,13 +56,32 @@ const styles = StyleSheet.create({
  * empty field after a backspace-heavy edit is ambiguous: SAVE on empty text and
  * CLEAR do the same thing here, and having both means neither has to be
  * guessed at.
+ *
+ * ── TWO JOBS, ONE COMPONENT, AND WHY THE EXTRA PROPS EXIST ─────────────────
+ *
+ * A set note is written to local state and is never wrong; a cue is a round
+ * trip to `POST /api/mobile/exercise/cue` that can be refused for length or
+ * fail outright. So this grew `validate`, `busy` and `error` rather than the
+ * cue growing a second near-identical screen. All three are optional and the
+ * note path passes none of them, which is what keeps that path exactly as it
+ * was.
+ *
+ * `error` has to render INSIDE this modal. It covers the confirmation sheet
+ * completely, so a failure reported on the sheet behind it would not be seen
+ * until the owner had already closed this and lost the draft.
  */
 export function TextPrompt({
   visible,
   title,
   subtitle,
+  footnote,
   initialText,
   placeholder,
+  submitLabel,
+  clearLabel,
+  validate,
+  busy = false,
+  error,
   onSubmit,
   onCancel,
 }: {
@@ -64,8 +89,22 @@ export function TextPrompt({
   title: string;
   /** What this note is attached to — "Set 2 · Bench Press", "All 4 sets". */
   subtitle?: string;
+  /** One quiet line under the field, for a rule the owner cannot infer. */
+  footnote?: string;
   initialText: string;
   placeholder?: string;
+  submitLabel?: string;
+  clearLabel?: string;
+  /**
+   * Why the LIVE draft cannot be saved, or `null`. Runs on every keystroke and
+   * disables the submit, so a cue that is too long is refused on the phone
+   * instead of costing a round trip to be told.
+   */
+  validate?: (text: string) => string | null;
+  /** True while the submit is in flight. Keeps the modal open and honest. */
+  busy?: boolean;
+  /** Why the last submit failed. The draft is deliberately still here. */
+  error?: string | null;
   onSubmit: (text: string) => void;
   onCancel: () => void;
 }) {
@@ -79,6 +118,11 @@ export function TextPrompt({
    * Re-seeded on every open. The component stays mounted between opens while
    * the parent holds it in the tree, so without this the note for set 2 would
    * open showing set 1's text — and the user would save it onto the wrong set.
+   *
+   * It keys off `initialText` as well as `visible`, which is also what lets a
+   * failed cue save keep the draft: the parent holds this open and does not
+   * change `initialText`, so nothing re-seeds and the typed words are still
+   * there to retry or correct.
    */
   useEffect(() => {
     if (!visible) return;
@@ -91,6 +135,8 @@ export function TextPrompt({
   }, [visible, initialText]);
 
   if (!visible) return null;
+
+  const problem = validate === undefined ? null : validate(text);
 
   return (
     <Modal visible transparent={false} animationType="slide" onRequestClose={onCancel}>
@@ -105,7 +151,7 @@ export function TextPrompt({
 
         <TextInput
           ref={input}
-          style={styles.input}
+          style={[styles.input, problem !== null && styles.inputBad]}
           value={text}
           onChangeText={setText}
           placeholder={placeholder ?? "Felt heavy, left shoulder tight…"}
@@ -114,29 +160,43 @@ export function TextPrompt({
           multiline
           blurOnSubmit={false}
           autoFocus
+          editable={!busy}
         />
+
+        {footnote !== undefined && <Text style={styles.footnote}>{footnote}</Text>}
+
+        {/*
+          The live length rule first, then whatever the last attempt came back
+          with. They are different problems — one is "this cannot be sent", the
+          other is "this was sent and refused" — and showing both at once is
+          correct when the owner has edited a rejected draft into a too-long one.
+        */}
+        {problem !== null && <Text style={styles.problem}>{problem}</Text>}
+        {error !== null && error !== undefined && <Text style={styles.problem}>{error}</Text>}
 
         <Button
           size="lg"
           style={styles.save}
+          disabled={busy || problem !== null}
           onPress={() => {
             tapSelect();
             onSubmit(text.trim());
           }}
         >
-          SAVE NOTE
+          {busy ? "SAVING…" : (submitLabel ?? "SAVE NOTE")}
         </Button>
 
         {initialText !== "" && (
           <Button
             variant="ghost"
             style={styles.clear}
+            disabled={busy}
             onPress={() => {
               tapSelect();
               onSubmit("");
             }}
           >
-            CLEAR IT
+            {clearLabel ?? "CLEAR IT"}
           </Button>
         )}
       </View>

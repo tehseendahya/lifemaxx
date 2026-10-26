@@ -65,6 +65,48 @@ export function applyKey(value: string, key: PadKey, allowDecimal: boolean): str
 }
 
 /**
+ * The same thing, for a value nobody has touched yet.
+ *
+ * The pad opens PREFILLED — with the weight you lifted last set, the macro the
+ * model estimated, yesterday's bodyweight. Until now the first digit appended
+ * to that, so going from 220 to 225 by typing `225` produced `220225`. The
+ * owner reported exactly that:
+ *
+ *   "If there is already a weight in, and I open it and start typing, it
+ *    should erase the current weight and start typing the new weight."
+ *
+ * So a prefill behaves like selected text: the first digit replaces it. Which
+ * is also what the readout already implied — a figure sitting there with a
+ * cursor nowhere is a value you are about to overwrite, not one you are
+ * appending to.
+ *
+ * ── BACKSPACE IS THE EXCEPTION, AND IT EARNS IT ────────────────────────────
+ *
+ * Selected text would be wiped by `⌫`. Here it edits in place instead: 220
+ * becomes 22, and one more key makes 225. That is TWO taps for the commonest
+ * correction on this pad — one plate up — where retyping the figure is three
+ * and wiping it is four. The press also ends the replacing state, so the digit
+ * after a backspace appends like any other.
+ *
+ * A leading `.` replaces too, and lands on `0.` rather than `220.`, which is
+ * the consistent reading of "the first key starts a new number".
+ */
+export function applyFirstKey(value: string, key: PadKey, allowDecimal: boolean): string {
+  if (key === BACKSPACE) return applyKey(value, key, allowDecimal);
+
+  const started = applyKey("", key, allowDecimal);
+  /*
+   * A key that does nothing to an EMPTY value does nothing at all — the inert
+   * `.` slot on an integer pad, `null`, anything that is not a digit. Those
+   * must leave the prefill alone, and the first version of this did not: it
+   * started from `""` unconditionally, so `.` on a reps pad silently wiped the
+   * figure. Unreachable through the grid, which renders that slot as an inert
+   * `View`, and exactly the kind of thing one refactor makes reachable.
+   */
+  return started === "" ? value : started;
+}
+
+/**
  * What the pad shows while the value is empty.
  *
  * A blank readout looks broken, and a zero that is indistinguishable from a

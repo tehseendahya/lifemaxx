@@ -6,6 +6,7 @@ import { and, count, eq, isNull, or } from "drizzle-orm";
 import { getExerciseHistory } from "@/lib/queries";
 import { displayLb } from "@/lib/domain/units";
 import { bestE1rm } from "@/lib/domain/e1rm";
+import { getCue } from "@/lib/cues";
 import { parseLimit, requireUuid } from "../shared";
 
 /**
@@ -40,7 +41,13 @@ export const GET = route(async ({ userId, searchParams }) => {
 
   if (!exercise) throw new HttpError("Unknown exercise.", 404);
 
-  const history = await getExerciseHistory(userId, exercise.id, limit);
+  // In parallel: neither read depends on the other, and the detail screen
+  // renders the cue above the history, so waiting for one to start the other
+  // would delay the first thing on the page.
+  const [history, cue] = await Promise.all([
+    getExerciseHistory(userId, exercise.id, limit),
+    getCue(userId, exercise.id),
+  ]);
 
   const peaks = history
     .map((session) => bestE1rm(session.sets))
@@ -54,6 +61,17 @@ export const GET = route(async ({ userId, searchParams }) => {
       incrementLb: displayLb(exercise.incrementKg),
       equipment: exercise.equipment,
     },
+    /**
+     * The carry-forward cue for this lift, or null.
+     *
+     * Here as well as in `bootstrap` because this screen SHOWS the cue, and a
+     * screen that displays a value it did not fetch is showing whichever of
+     * two caches answered last. The detail screen reads this field; it does
+     * not write one — the confirm sheet is the single editor, and
+     * `POST exercise/cue` invalidates `queryKeys.exercise(id)` so a cue
+     * changed there is refetched through here rather than patched twice.
+     */
+    cue,
     history: history.map((session) => ({
       date: session.date,
       sets: session.sets.map((s) => ({

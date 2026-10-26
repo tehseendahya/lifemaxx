@@ -75,7 +75,21 @@ export { Label, microLabel } from "./Label";
 export { MacroBar } from "./MacroBar";
 export { NumberPad } from "./NumberPad";
 export { Pill } from "./Pill";
+/**
+ * A value against a target band. Deliberately not exported from `charts.tsx`:
+ * that file forbids status colour ("a line is not a state") and this *is* a
+ * state, so it is a meter rather than a chart and the two do not share a file.
+ */
+export { RangeBar } from "./RangeBar";
 export { Screen } from "./Screen";
+/**
+ * One question, every answer visible, one tap. Lives here rather than beside a
+ * feature because two of them need it: the confirmation sheet's RPE and set
+ * kind, and the session card's set kind — which is the same pair of flags and
+ * had to stop being two independent toggles.
+ */
+export { Segmented } from "./Segmented";
+export type { Segment, SegmentTone } from "./Segmented";
 export { Sheet } from "./Sheet";
 /**
  * `Sheet`'s height cap, as a pure function of the window and the top inset.
