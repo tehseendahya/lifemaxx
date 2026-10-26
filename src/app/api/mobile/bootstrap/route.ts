@@ -2,7 +2,7 @@ import { route } from "@/lib/api";
 import { preflight } from "@/lib/auth/cors";
 import { db } from "@/db";
 import { exerciseMuscles, exercises, sets, workouts } from "@/db/schema";
-import { and, asc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import {
   getProfile, getActiveTarget, getDayMeals, sumMacros, getMuscleVolume,
   getTdee, defaultProteinTarget, getActiveWorkout, getRuns,
@@ -10,6 +10,7 @@ import {
   getDailyHardSets, getMainLiftE1rmSeries, shiftDate, HISTORY_LOOKBACK_DAYS,
 } from "@/lib/queries";
 import { mergeHistoryDays } from "@/lib/history";
+import { groupRecentWorkouts, modalSet, type RecentWorkout } from "@/lib/recent-workouts";
 import { getCues } from "@/lib/cues";
 import { summarize } from "@/lib/domain/readiness";
 import { displayLb } from "@/lib/domain/units";
@@ -42,7 +43,7 @@ export const GET = route(async ({ userId, tz, today }) => {
   const [
     profile, target, meals, volume, tdee, proteinFloor,
     active, runs, lowerBodyLiftDates, gymList, catalogueRows, lastSets,
-    weighInSeries, intakeSeries, hardSetDays, mainLiftSeries, cues,
+    weighInSeries, intakeSeries, hardSetDays, mainLiftSeries, cues, recentWorkouts,
   ] = await Promise.all([
     getProfile(userId),
     getActiveTarget(userId, today),
@@ -97,6 +98,14 @@ export const GET = route(async ({ userId, tz, today }) => {
      * launch-blocking critical path entirely.
      */
     getCues(userId),
+
+    /*
+     * Past workouts AS workouts — see `src/lib/recent-workouts.ts`. The Lift
+     * tab's "Last session" card used to rebuild a session from `lastSets` by
+     * date, which glued any two workouts sharing a date into one; this is what
+     * it reads now, and what a workout is deleted from.
+     */
+    getRecentWorkouts(userId),
   ]);
 
   const muscleMap = await muscleMapFor(catalogueRows.map((row) => row.id));
@@ -158,6 +167,7 @@ export const GET = route(async ({ userId, tz, today }) => {
       muscles: muscleMap.get(row.id) ?? [],
     })),
     lastSets,
+    recentWorkouts,
 
     /**
      * Carry-forward cues, keyed by exercise id. Lifts without one are ABSENT
@@ -290,25 +300,51 @@ async function lastSetPerExercise(userId: string): Promise<Record<string, LastSe
   return out;
 }
 
-/**
- * The weight×reps the session actually was.
- *
- * Mode rather than max or last: 3×8 at 185 with a dropped fourth set at 135 is
- * a 185×8 session, and opening the pad on either the heaviest or the final set
- * would be wrong in opposite directions. Ties break toward the heavier load,
- * then the higher reps — the work rather than the outlier.
- */
-function modalSet(working: { weightKg: number; reps: number }[]) {
-  const counts = new Map<string, { weightKg: number; reps: number; n: number }>();
-  for (const s of working) {
-    const key = `${s.weightKg}:${s.reps}`;
-    const seen = counts.get(key);
-    if (seen) seen.n += 1;
-    else counts.set(key, { weightKg: s.weightKg, reps: s.reps, n: 1 });
-  }
-  return [...counts.values()].sort(
-    (a, b) => b.n - a.n || b.weightKg - a.weightKg || b.reps - a.reps,
-  )[0];
-}
-
 const toLbOrNull = (kg: number | null): number | null => (kg === null ? null : displayLb(kg));
+
+/** How many past workouts the Lift tab lists. Enough to find a mistake in. */
+const RECENT_WORKOUT_LIMIT = 10;
+
+/**
+ * The last few completed workouts, each with its own lifts.
+ *
+ * Two reads rather than one window query: the first picks WHICH workouts (by
+ * when they started — not by date, the field that was wrong), the second
+ * fetches their sets. Ten workouts of a couple of dozen sets each is a few
+ * hundred rows, well inside what this endpoint already moves.
+ */
+async function getRecentWorkouts(userId: string): Promise<RecentWorkout[]> {
+  const picked = await db
+    .select({
+      id: workouts.id,
+      name: workouts.name,
+      localDate: workouts.localDate,
+      startedAt: workouts.startedAt,
+      endedAt: workouts.endedAt,
+    })
+    .from(workouts)
+    .where(and(eq(workouts.userId, userId), eq(workouts.status, "completed")))
+    .orderBy(desc(workouts.startedAt))
+    .limit(RECENT_WORKOUT_LIMIT);
+
+  if (picked.length === 0) return [];
+  const byId = new Map(picked.map((w) => [w.id, w]));
+
+  const rows = await db
+    .select({
+      workoutId: sets.workoutId,
+      exerciseId: sets.exerciseId,
+      reps: sets.reps,
+      weightKg: sets.weightKg,
+      rpe: sets.rpe,
+      isWarmup: sets.isWarmup,
+      loggedAt: sets.loggedAt,
+    })
+    .from(sets)
+    .where(inArray(sets.workoutId, picked.map((w) => w.id)));
+
+  return groupRecentWorkouts(rows.map((r) => {
+    const w = byId.get(r.workoutId)!;
+    return { ...r, name: w.name, localDate: w.localDate, startedAt: w.startedAt, endedAt: w.endedAt };
+  }));
+}

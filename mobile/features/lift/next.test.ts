@@ -2,10 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import type {
   Bootstrap, CatalogueExercise, HistoryDay, LastSet, MuscleContributionDto, RankedMuscle,
+  RecentWorkoutDto,
 } from "../../lib/types";
 import {
   GAP_NAMED_LIMIT, NEXT_UP_LIMIT, THIN_LIFT_DAYS,
-  lastSessionBlock, mainLiftRows, nextUpBlock,
+  deleteWorkoutPrompt, lastSessionBlock, mainLiftRows, nextUpBlock, recentWorkoutRows,
 } from "./next";
 
 /**
@@ -464,5 +465,139 @@ describe("mainLiftRows", () => {
 
   it("is empty when no lift has been logged twice", () => {
     expect(mainLiftRows(bootstrap())).toEqual([]);
+  });
+});
+
+// ------------------------------------------------------ real workouts
+
+/**
+ * The owner's report, as data: "it for some reason combined all my stuff into
+ * one lift as it thinks today is all one day".
+ *
+ * Two workouts, both stored under the same date (the profile timezone was the
+ * New York default, so a Sydney Monday noon was a New York Sunday). The old
+ * card grouped by date and drew one session out of the two; these fixtures
+ * reproduce that and pin the card to the workout instead.
+ */
+function workout(over: Partial<RecentWorkoutDto> & { id: string }): RecentWorkoutDto {
+  return {
+    name: "Workout",
+    localDate: "2026-10-25",
+    startedAt: "2026-10-25T12:23:40.000Z",
+    durationMin: 60,
+    workingSets: 0,
+    exercises: [],
+    ...over,
+  };
+}
+
+const CHEST_DAY = workout({
+  id: "w-chest",
+  name: "Push — Chest & Biceps",
+  startedAt: "2026-10-25T02:00:00.000Z",
+  workingSets: 7,
+  exercises: [
+    { exerciseId: "ex-bench", sets: 4, weightLb: 165, reps: 5, rpe: 7 },
+    { exerciseId: "ex-curl", sets: 3, weightLb: 30, reps: 10, rpe: null },
+  ],
+});
+
+const BACK_DAY = workout({
+  id: "w-back",
+  name: "Pull — Upper Back & Triceps",
+  startedAt: "2026-10-26T00:46:29.000Z",
+  workingSets: 3,
+  exercises: [{ exerciseId: "ex-hammer", sets: 3, weightLb: 35, reps: 12, rpe: 8 }],
+});
+
+describe("lastSessionBlock — from real workouts", () => {
+  it("shows the newest workout alone, not every lift sharing its date", () => {
+    // Both are dated 2026-10-25. The date-grouped card merged them into one
+    // session of bench, curl and hammer curl; this one is the back day only.
+    const last = lastSessionBlock(bootstrap({
+      lastSets: {
+        "ex-bench": { localDate: "2026-10-25", weightLb: 165, reps: 5, rpe: 7, sets: 4, bestE1rmLb: null },
+        "ex-curl": { localDate: "2026-10-25", weightLb: 30, reps: 10, rpe: null, sets: 3, bestE1rmLb: null },
+        "ex-hammer": { localDate: "2026-10-25", weightLb: 35, reps: 12, rpe: 8, sets: 3, bestE1rmLb: null },
+      },
+      recentWorkouts: [BACK_DAY, CHEST_DAY],
+    }));
+
+    expect(last?.name).toBe("Pull — Upper Back & Triceps");
+    expect(last?.exerciseIds).toEqual(["ex-hammer"]);
+    expect(last?.rows[0]).toMatchObject({ name: "Hammer Curl", detail: "35 × 12 × 3 sets @8" });
+  });
+
+  it("would have merged them under the old date grouping", () => {
+    // Documents what the fallback does, so nobody "simplifies" the card back
+    // onto it: same data, no recentWorkouts, three lifts in one session.
+    const merged = lastSessionBlock(bootstrap({
+      lastSets: {
+        "ex-bench": { localDate: "2026-10-25", weightLb: 165, reps: 5, rpe: 7, sets: 4, bestE1rmLb: null },
+        "ex-hammer": { localDate: "2026-10-25", weightLb: 35, reps: 12, rpe: 8, sets: 3, bestE1rmLb: null },
+      },
+    }));
+    expect(merged?.exerciseIds.sort()).toEqual(["ex-bench", "ex-hammer"]);
+  });
+
+  it("repeats exactly the lifts of that workout, in the order they were done", () => {
+    const last = lastSessionBlock(bootstrap({ recentWorkouts: [CHEST_DAY] }));
+    expect(last?.exerciseIds).toEqual(["ex-bench", "ex-curl"]);
+  });
+
+  it("skips a warmup-only workout for the repeat card", () => {
+    const warmups = workout({ id: "w-warm", startedAt: "2026-10-26T05:00:00.000Z" });
+    const last = lastSessionBlock(bootstrap({ recentWorkouts: [warmups, CHEST_DAY] }));
+    expect(last?.name).toBe("Push — Chest & Biceps");
+  });
+
+  it("says there is no last session when the server sends none", () => {
+    // An empty list is an answer; it must not fall back to lastSets.
+    expect(lastSessionBlock(bootstrap({ recentWorkouts: [] }))).toBeNull();
+  });
+});
+
+describe("recentWorkoutRows — what can be deleted", () => {
+  it("lists two workouts on one date as two rows", () => {
+    const rows = recentWorkoutRows(bootstrap({ recentWorkouts: [BACK_DAY, CHEST_DAY] }));
+    expect(rows.map((r) => r.id)).toEqual(["w-back", "w-chest"]);
+  });
+
+  it("summarises each one in a line", () => {
+    const [row] = recentWorkoutRows(bootstrap({ recentWorkouts: [CHEST_DAY] }));
+    expect(row.summary).toBe("7 sets · Barbell Bench Press, Dumbbell Curl");
+    expect(row.when).toBe("today · 25 Oct");
+  });
+
+  it("names two lifts and counts the rest", () => {
+    const busy = workout({
+      id: "w-busy",
+      workingSets: 9,
+      exercises: ["ex-bench", "ex-smith", "ex-curl", "ex-crunch"].map((id) => ({
+        exerciseId: id, sets: 2, weightLb: 50, reps: 10, rpe: null,
+      })),
+    });
+    expect(recentWorkoutRows(bootstrap({ recentWorkouts: [busy] }))[0].summary)
+      .toBe("9 sets · Barbell Bench Press, Smith Machine Incline Press +2");
+  });
+
+  it("still lists a warmup-only workout, since that may be the mistake", () => {
+    const [row] = recentWorkoutRows(bootstrap({ recentWorkouts: [workout({ id: "w-warm" })] }));
+    expect(row.summary).toBe("0 sets · warmups only");
+  });
+
+  it("lists nothing from an old bootstrap without the field", () => {
+    expect(recentWorkoutRows(bootstrap())).toEqual([]);
+  });
+});
+
+describe("deleteWorkoutPrompt", () => {
+  const row = (workingSets: number) =>
+    recentWorkoutRows(bootstrap({ recentWorkouts: [workout({ id: "w", workingSets })] }))[0];
+
+  it("says how many sets go, because there is no undo", () => {
+    expect(deleteWorkoutPrompt(row(16))).toBe("All 16 sets will be deleted with it. This cannot be undone.");
+    expect(deleteWorkoutPrompt(row(1))).toBe("Its 1 set will be deleted with it. This cannot be undone.");
+    expect(deleteWorkoutPrompt(row(0))).toBe("Its warmup sets will be deleted with it. This cannot be undone.");
   });
 });
