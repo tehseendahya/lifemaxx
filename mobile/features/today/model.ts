@@ -409,6 +409,13 @@ export interface GoalGap {
 
 export interface TargetRow {
   key: string;
+  /**
+   * The claim the row was built from. Carried so `goal-meter.ts` can draw a
+   * meter without re-parsing the prose: a second `extractGoalClaims` call that
+   * happened to split a sentence differently would put a meter under the wrong
+   * headline.
+   */
+  claim: GoalClaim;
   /** The one derived string on the row: "Barbell Bench Press → 205 lb". */
   headline: string;
   /** The owner's own sentence, verbatim. Never rewritten. */
@@ -442,6 +449,15 @@ export interface GoalsBlock {
   /** Set when `goalsText` is blank. */
   empty: string | null;
 }
+
+/**
+ * The Goals card with nothing written. An invitation with an example of the one
+ * shape this app can track, because "set a goal" on its own gets a sentence
+ * like "get stronger", which has nothing in it to measure.
+ */
+export const GOALS_EMPTY =
+  "Write down what you're training for. A number and a month, like "
+  + "\"bench 205 by December\", gets tracked here.";
 
 /** Weeks left before a deadline is tight enough to colour. */
 const DEADLINE_WARN_WEEKS = 4;
@@ -606,8 +622,7 @@ export function goalsBlock(b: Bootstrap): GoalsBlock {
       aims: [],
       context: [],
       note: null,
-      empty: "Nothing written down yet. Write it however you like. A number and a month — "
-        + "\"bench 205 by December\" — and it gets tracked automatically.",
+      empty: GOALS_EMPTY,
     };
   }
 
@@ -617,6 +632,7 @@ export function goalsBlock(b: Bootstrap): GoalsBlock {
     const gap = gapFor(claim, b);
     return {
       key: `${claim.kind}-${i}`,
+      claim,
       headline: headlineFor(claim),
       sentence: claim.sentence,
       gap,
@@ -764,6 +780,13 @@ export interface StrengthRow {
   tone: "good" | "muted" | "warn";
   /** One logged session. Draws a point and says so — never a two-point line. */
   single: boolean;
+  /** The first session's date in the window. */
+  firstDate: string;
+  /**
+   * The sentence that stands in for a chart at one point. Null at two or more,
+   * where the sparkline says it instead.
+   */
+  singleLine: string | null;
 }
 
 export function strengthRows(b: Bootstrap): StrengthRow[] {
@@ -773,6 +796,7 @@ export function strengthRows(b: Bootstrap): StrengthRow[] {
       const values = lift.points.map((p) => Math.round(p.e1rmLb));
       const single = values.length === 1;
       const delta = single ? 0 : values[values.length - 1] - values[0];
+      const firstDate = lift.points[0].date;
       return {
         exerciseId: lift.exerciseId,
         name: lift.name,
@@ -781,6 +805,15 @@ export function strengthRows(b: Bootstrap): StrengthRow[] {
         deltaLabel: single ? null : `${signed(delta)} lb`,
         tone: delta > 0 ? "good" : delta < 0 ? "warn" : "muted",
         single,
+        firstDate,
+        /*
+         * One point is a figure and a sentence, never a chart (§1 of the
+         * redesign: a chart needs two points). The sentence says when the line
+         * starts, which is the only honest thing a single session can promise.
+         */
+        singleLine: single
+          ? `First session ${formatShortDate(firstDate)}. The trend starts with your next one.`
+          : null,
       };
     });
 }
@@ -841,7 +874,6 @@ export interface ConsistencyStat {
 
 export interface ConsistencyBlock {
   stats: [ConsistencyStat, ConsistencyStat, ConsistencyStat];
-  note: string;
 }
 
 /**
@@ -862,8 +894,14 @@ export interface ConsistencyBlock {
  *  - No app-open or session-started streak. That measures the app, not the
  *    person.
  *
- * This card always renders. `0 day streak` is information, and a zero that is
- * true is better than a card that hides when the news is bad.
+ * The block renders inside "This month", which is absent only when history is
+ * entirely empty. `0 day streak` beside a lift grid with three days in it is
+ * information, and a zero that is true is better than a card that hides when
+ * the news is bad.
+ *
+ * The footnote that used to sit under these three ("Streak counts days you
+ * weighed in…") is gone. It was always-on prose explaining a label, and the
+ * label already says WEIGH-INS.
  */
 export function consistencyBlock(b: Bootstrap): ConsistencyBlock {
   const streak = weighInStreak(b.history.days);
@@ -897,8 +935,6 @@ export function consistencyBlock(b: Bootstrap): ConsistencyBlock {
         hint: `${(lifts / (CONSISTENCY_WINDOW_DAYS / 7)).toFixed(1)}/wk`,
       },
     ],
-    note: "Streak counts days you weighed in. Nothing else — not app opens, "
-      + "not hitting a target.",
   };
 }
 

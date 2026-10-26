@@ -352,13 +352,14 @@ export interface RecentWorkoutRow {
   when: string;
   /** `12 sets · Bench Press, Curl +2`. */
   summary: string;
-  /** For the delete sheet's confirmation line: exactly what goes. */
+  /** Working sets in the workout — the figure `deleteWorkoutPrompt` states. */
   workingSets: number;
   lifts: string[];
 }
 
 /**
- * The past workouts the Lift tab lists, each one a thing that can be deleted.
+ * The past workouts the Lift tab lists, each one a door into that workout —
+ * where its sets can be fixed, added to, or the whole thing deleted.
  *
  * One row per WORKOUT, never per date — two sessions in a day are two rows.
  * Unlike the Last session card, a workout with no working sets is listed: a
@@ -393,8 +394,12 @@ export function recentWorkoutRows(b: Bootstrap): RecentWorkoutRow[] {
  * The count is the point. "Delete this workout?" alone does not tell the owner
  * whether they are about to lose one stray set or an hour of training, and
  * there is no undo — the sets cascade with the row.
+ *
+ * Takes only the count, so the workout detail screen — where the delete lives
+ * now — can ask with what it has rather than a list row it never built. A
+ * `RecentWorkoutRow` still satisfies it.
  */
-export function deleteWorkoutPrompt(row: RecentWorkoutRow): string {
+export function deleteWorkoutPrompt(row: Pick<RecentWorkoutRow, "workingSets">): string {
   const what =
     row.workingSets === 0 ? "Its warmup sets"
     : row.workingSets === 1 ? "Its 1 set"

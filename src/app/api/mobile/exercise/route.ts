@@ -73,6 +73,8 @@ export const GET = route(async ({ userId, searchParams }) => {
      */
     cue,
     history: history.map((session) => ({
+      // The workout this session was, so a history row can open it.
+      workoutId: session.workoutId,
       date: session.date,
       sets: session.sets.map((s) => ({
         reps: s.reps,

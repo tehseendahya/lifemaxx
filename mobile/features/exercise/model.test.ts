@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { barHeightPct, buildExerciseView, formatDay } from "./model";
+import {
+  buildExerciseView, firstSessionLine, formatDay, formatShort, goalTargetLb, metricFor,
+  prSessions, progressSeries, topSetOf,
+} from "./model";
+import type { GoalClaim } from "../today/goals";
 import type { ExerciseHistory, HistorySet } from "@/lib/types";
 
 const set = (over: Partial<HistorySet> = {}): HistorySet => ({
@@ -14,159 +18,391 @@ const set = (over: Partial<HistorySet> = {}): HistorySet => ({
   ...over,
 });
 
+type Session = ExerciseHistory["history"][number];
+
+const session = (date: string, sets: HistorySet[], workoutId?: string): Session =>
+  workoutId === undefined ? { date, sets } : { date, sets, workoutId };
+
+const BENCH = {
+  id: "4b5514ef-9b80-4947-9a9b-d743b3c0924c",
+  name: "Barbell Bench Press",
+  slug: "barbell-bench-press",
+  incrementLb: 5,
+  equipment: "barbell",
+};
+
+const CURL = {
+  id: "a9c1e7e0-0f6e-4d0c-9a57-1b0a8f5f6f11",
+  name: "Preacher Curl",
+  slug: "preacher-curl",
+  incrementLb: 5,
+  equipment: "barbell",
+};
+
+const PUSHUP = {
+  id: "7d0f0a4e-3f43-4c39-8c0f-2c2a0c7b9e10",
+  name: "Push-Up",
+  slug: "push-up",
+  incrementLb: 5,
+  equipment: "bodyweight",
+};
+
 const payload = (over: Partial<ExerciseHistory> = {}): ExerciseHistory => ({
-  exercise: {
-    id: "4b5514ef-9b80-4947-9a9b-d743b3c0924c",
-    name: "Barbell Bench Press",
-    slug: "barbell-bench-press",
-    incrementLb: 5,
-    equipment: "barbell",
-  },
+  exercise: BENCH,
   history: [],
   bestE1rmLb: null,
   ...over,
 });
 
-describe("formatDay", () => {
+describe("formatDay / formatShort", () => {
   it("formats an ISO date without touching the device clock", () => {
     expect(formatDay("2026-10-25")).toBe("Sun, Oct 25");
     expect(formatDay("2026-01-01")).toBe("Thu, Jan 1");
-    expect(formatDay("2026-12-31")).toBe("Thu, Dec 31");
+    expect(formatShort("2026-09-03")).toBe("Sep 3");
   });
 
   it("returns the input unchanged when it is not a date", () => {
     expect(formatDay("")).toBe("");
     expect(formatDay("nonsense")).toBe("nonsense");
+    expect(formatShort("nonsense")).toBe("nonsense");
+  });
+});
+
+describe("metricFor", () => {
+  it("is e1rm for a barbell main lift", () => {
+    expect(metricFor(BENCH, [session("2026-10-20", [set()])])).toBe("e1rm");
+  });
+
+  it("is e1rm for a main lift even with no history — the list decides, not the data", () => {
+    expect(metricFor(BENCH, [])).toBe("e1rm");
+  });
+
+  it("is topSet for anything off the list, barbell or not", () => {
+    // Preacher curl is done on a barbell and is still not an e1RM lift.
+    expect(metricFor(CURL, [session("2026-10-20", [set({ weightLb: 60, reps: 10 })])])).toBe("topSet");
+    expect(metricFor({ slug: "dumbbell-bench-press" }, [session("2026-10-20", [set()])])).toBe("topSet");
+  });
+
+  it("is reps when every working set is at zero load", () => {
+    const sessions = [session("2026-10-20", [set({ weightLb: 0, reps: 12 }), set({ weightLb: 0, reps: 10 })])];
+    expect(metricFor(PUSHUP, sessions)).toBe("reps");
+  });
+
+  it("ignores a loaded warmup when deciding it is a reps lift", () => {
+    const sessions = [session("2026-10-20", [
+      set({ weightLb: 25, isWarmup: true }),
+      set({ weightLb: 0, reps: 12 }),
+    ])];
+    expect(metricFor(PUSHUP, sessions)).toBe("reps");
+  });
+
+  it("goes back to topSet once any working set carries load", () => {
+    const sessions = [
+      session("2026-10-23", [set({ weightLb: 25, reps: 8 })]),
+      session("2026-10-20", [set({ weightLb: 0, reps: 12 })]),
+    ];
+    expect(metricFor(PUSHUP, sessions)).toBe("topSet");
+  });
+
+  it("is topSet, not reps, with no working sets at all", () => {
+    expect(metricFor(CURL, [])).toBe("topSet");
+    expect(metricFor(CURL, [session("2026-10-20", [set({ isWarmup: true, weightLb: 0 })])])).toBe("topSet");
+  });
+});
+
+describe("topSetOf", () => {
+  it("takes the heaviest working set", () => {
+    expect(topSetOf([set({ weightLb: 185, reps: 5 }), set({ weightLb: 195, reps: 2 })]))
+      .toEqual({ weightLb: 195, reps: 2 });
+  });
+
+  it("breaks a weight tie on reps, whichever order they came in", () => {
+    expect(topSetOf([set({ weightLb: 50, reps: 8 }), set({ weightLb: 50, reps: 10 })]))
+      .toEqual({ weightLb: 50, reps: 10 });
+    expect(topSetOf([set({ weightLb: 50, reps: 10 }), set({ weightLb: 50, reps: 8 })]))
+      .toEqual({ weightLb: 50, reps: 10 });
+  });
+
+  it("never picks a warmup, however heavy", () => {
+    expect(topSetOf([set({ weightLb: 225, isWarmup: true }), set({ weightLb: 185 })]))
+      .toEqual({ weightLb: 185, reps: 5 });
+  });
+
+  it("is null for warmups only", () => {
+    expect(topSetOf([set({ isWarmup: true })])).toBeNull();
+    expect(topSetOf([])).toBeNull();
+  });
+});
+
+describe("progressSeries", () => {
+  const sessions = [
+    session("2026-10-23", [set({ weightLb: 185, reps: 5 })]),
+    session("2026-10-18", [set({ weightLb: 180, reps: 5 })]),
+    session("2026-10-13", [set({ weightLb: 175, reps: 5 })]),
+  ];
+
+  it("runs oldest first while the history stays newest first", () => {
+    expect(progressSeries("topSet", sessions).map((p) => p.date))
+      .toEqual(["2026-10-13", "2026-10-18", "2026-10-23"]);
+  });
+
+  it("plots top-set weight for topSet", () => {
+    expect(progressSeries("topSet", sessions).map((p) => p.value)).toEqual([175, 180, 185]);
+  });
+
+  it("plots Epley for e1rm, from pounds", () => {
+    expect(progressSeries("e1rm", sessions)[2].value).toBeCloseTo(185 * (1 + 5 / 30), 6);
+  });
+
+  it("drops a session outside Epley's reliable range from an e1rm series only", () => {
+    const highRep = [session("2026-10-23", [set({ reps: 20, weightLb: 95 })])];
+    expect(progressSeries("e1rm", highRep)).toEqual([]);
+    expect(progressSeries("topSet", highRep).map((p) => p.value)).toEqual([95]);
+  });
+
+  it("plots the best rep count for reps", () => {
+    const s = [session("2026-10-20", [set({ weightLb: 0, reps: 12 }), set({ weightLb: 0, reps: 15 })])];
+    expect(progressSeries("reps", s).map((p) => p.value)).toEqual([15]);
+  });
+});
+
+describe("prSessions", () => {
+  it("marks a session that beats every earlier one, and never the first", () => {
+    // Newest first, as sent. Oldest is index 3.
+    const sessions = [
+      session("2026-10-23", [set({ weightLb: 190 })]), // beats 185 → PR
+      session("2026-10-18", [set({ weightLb: 180 })]), // below 185 → not
+      session("2026-10-13", [set({ weightLb: 185 })]), // beats 175 → PR
+      session("2026-10-08", [set({ weightLb: 175 })]), // first → never
+    ];
+    expect([...prSessions("topSet", sessions)].sort()).toEqual([0, 2]);
+  });
+
+  it("does not call matching the best a PR", () => {
+    const sessions = [
+      session("2026-10-18", [set({ weightLb: 185 })]),
+      session("2026-10-13", [set({ weightLb: 185 })]),
+    ];
+    expect(prSessions("topSet", sessions).size).toBe(0);
+  });
+
+  it("counts more reps at the same top weight as a PR", () => {
+    const sessions = [
+      session("2026-10-18", [set({ weightLb: 185, reps: 7 })]),
+      session("2026-10-13", [set({ weightLb: 185, reps: 5 })]),
+    ];
+    expect([...prSessions("topSet", sessions)]).toEqual([0]);
+  });
+
+  it("compares against the best so far, not the session just before", () => {
+    const sessions = [
+      session("2026-10-23", [set({ weightLb: 185 })]), // beats 180 but not 190
+      session("2026-10-18", [set({ weightLb: 180 })]),
+      session("2026-10-13", [set({ weightLb: 190 })]),
+    ];
+    expect(prSessions("topSet", sessions).size).toBe(0);
+  });
+
+  it("uses e1RM on an e1rm lift, so a lighter set with more reps can be the PR", () => {
+    const sessions = [
+      session("2026-10-18", [set({ weightLb: 175, reps: 8 })]), // 221.7
+      session("2026-10-13", [set({ weightLb: 185, reps: 5 })]), // 215.8
+    ];
+    expect([...prSessions("e1rm", sessions)]).toEqual([0]);
+    expect(prSessions("topSet", sessions).size).toBe(0);
+  });
+
+  it("skips a session with no value rather than resetting the record", () => {
+    const sessions = [
+      session("2026-10-23", [set({ weightLb: 180 })]),
+      session("2026-10-18", [set({ isWarmup: true, weightLb: 300 })]),
+      session("2026-10-13", [set({ weightLb: 185 })]),
+    ];
+    expect(prSessions("topSet", sessions).size).toBe(0);
+  });
+});
+
+describe("firstSessionLine", () => {
+  it("prints the one set as a figure and says what comes next", () => {
+    const [point] = progressSeries("topSet", [session("2026-10-20", [set({ weightLb: 50, reps: 10 })])]);
+    expect(firstSessionLine("topSet", point))
+      .toBe("First logged Oct 20: 50 × 10. Your trend starts with the next session.");
+  });
+
+  it("prints reps for a reps lift", () => {
+    const [point] = progressSeries("reps", [session("2026-10-20", [set({ weightLb: 0, reps: 12 })])]);
+    expect(firstSessionLine("reps", point))
+      .toBe("First logged Oct 20: 12 reps. Your trend starts with the next session.");
+  });
+});
+
+describe("goalTargetLb", () => {
+  const claim = (exerciseId: string, targetLb: number, byDate: string | null): GoalClaim => ({
+    kind: "lift", sentence: "", exerciseId, exerciseName: "", targetLb, byDate,
+  });
+
+  it("takes the nearest deadline on this lift", () => {
+    const claims = [claim(BENCH.id, 225, "2027-05-01"), claim(BENCH.id, 205, "2026-12-01")];
+    expect(goalTargetLb(BENCH.id, claims)).toBe(205);
+  });
+
+  it("ranks an undated target after a dated one", () => {
+    expect(goalTargetLb(BENCH.id, [claim(BENCH.id, 250, null), claim(BENCH.id, 205, "2026-12-01")]))
+      .toBe(205);
+  });
+
+  it("ignores other lifts and rep targets", () => {
+    const reps: GoalClaim = {
+      kind: "lift_reps", sentence: "", exerciseId: BENCH.id, exerciseName: "", targetReps: 10,
+      loadLb: 45, byDate: null,
+    };
+    expect(goalTargetLb(BENCH.id, [claim("other", 300, null), reps])).toBeNull();
   });
 });
 
 describe("buildExerciseView", () => {
-  it("survives an exercise with no history at all", () => {
+  it("draws nothing for a lift with no sessions", () => {
     const v = buildExerciseView(payload());
+    expect(v.progress).toEqual({ kind: "none" });
     expect(v.sessions).toEqual([]);
-    expect(v.trend).toEqual([]);
-    expect(v.peakE1rmLb).toBeNull();
-    expect(v.changePct).toBeNull();
-    expect(v.subtitle).toBe("barbell · 5 lb increment");
+    expect(v.subtitle).toBe("barbell · 5 lb steps");
   });
 
-  it("excludes warmups from both the volume and the trend", () => {
-    const v = buildExerciseView(payload({
-      history: [{
-        date: "2026-10-23",
-        sets: [set({ weightLb: 95, isWarmup: true }), set({ weightLb: 185 })],
-      }],
-    }));
+  it("is a sentence, not a chart, after one session", () => {
+    const v = buildExerciseView(payload({ history: [session("2026-10-20", [set()])] }));
+    expect(v.progress).toEqual({
+      kind: "single",
+      label: "Estimated 1RM",
+      line: "First logged Oct 20: 185 × 5. Your trend starts with the next session.",
+    });
+  });
 
-    expect(v.sessions[0].sets).toHaveLength(1);
+  it("shows ESTIMATED 1RM for the barbell bench, with the goal line", () => {
+    const v = buildExerciseView(
+      payload({
+        history: [
+          session("2026-10-23", [set({ weightLb: 190, reps: 5 })]),
+          session("2026-10-13", [set({ weightLb: 185, reps: 5 })]),
+        ],
+      }),
+      [{ kind: "lift", sentence: "", exerciseId: BENCH.id, exerciseName: "", targetLb: 205, byDate: null }],
+    );
+    expect(v.metric).toBe("e1rm");
+    if (v.progress.kind !== "chart") throw new Error("expected a chart");
+    expect(v.progress.label).toBe("Estimated 1RM");
+    expect(v.progress.best).toBe("222 lb");
+    expect(v.progress.change).toEqual({ text: "+6 lb", up: true });
+    expect(v.progress.span).toBe("over 2 sessions");
+    expect(v.progress.reference).toBe(205);
+    expect(v.progress.last).toBe("Last top set 190 × 5");
+    expect(v.progress.left).toBe("Oct 13");
+    expect(v.progress.right).toBe("Oct 23");
+  });
+
+  it("shows TOP SET for a preacher curl, and no e1RM or goal line anywhere", () => {
+    const v = buildExerciseView(
+      payload({
+        exercise: CURL,
+        history: [
+          session("2026-10-20", [set({ weightLb: 50, reps: 10 }), set({ weightLb: 50, reps: 8 })]),
+          session("2026-09-03", [set({ weightLb: 45, reps: 10 })]),
+        ],
+      }),
+      [{ kind: "lift", sentence: "", exerciseId: CURL.id, exerciseName: "", targetLb: 70, byDate: null }],
+    );
+    expect(v.metric).toBe("topSet");
+    expect(v.progress).toMatchObject({
+      kind: "chart",
+      label: "Top set",
+      best: "50 × 10",
+      change: { text: "+5 lb", up: true },
+      span: "since Sep 3",
+      values: [45, 50],
+      reference: null,
+      last: "Last top set 50 × 10",
+    });
+  });
+
+  it("names the best top set by weight first, with the reps done at it", () => {
+    const v = buildExerciseView(payload({
+      exercise: CURL,
+      history: [
+        session("2026-10-23", [set({ weightLb: 45, reps: 15 })]),
+        session("2026-10-20", [set({ weightLb: 55, reps: 6 })]),
+      ],
+    }));
+    expect(v.progress).toMatchObject({ kind: "chart", best: "55 × 6", change: { text: "−10 lb", up: false } });
+  });
+
+  it("shows BEST SET in reps for a zero-load lift", () => {
+    const v = buildExerciseView(payload({
+      exercise: PUSHUP,
+      history: [
+        session("2026-10-23", [set({ weightLb: 0, reps: 14 })]),
+        session("2026-10-20", [set({ weightLb: 0, reps: 12 })]),
+      ],
+    }));
+    expect(v.progress).toMatchObject({
+      kind: "chart",
+      label: "Best set",
+      best: "14 reps",
+      change: { text: "+2 reps", up: true },
+      last: "Last best set 14 reps",
+    });
+  });
+
+  it("reports no change rather than '+0 lb'", () => {
+    const v = buildExerciseView(payload({
+      exercise: CURL,
+      history: [session("2026-10-23", [set()]), session("2026-10-20", [set()])],
+    }));
+    expect(v.progress).toMatchObject({ kind: "chart", change: null });
+  });
+
+  it("keeps warmups in the history rows but out of volume and set count", () => {
+    const v = buildExerciseView(payload({
+      history: [session("2026-10-23", [set({ weightLb: 95, isWarmup: true }), set({ weightLb: 185 })])],
+    }));
+    expect(v.sessions[0].sets).toHaveLength(2);
+    expect(v.sessions[0].workingSets).toBe(1);
     expect(v.sessions[0].volumeLb).toBe(185 * 5);
-    expect(v.trend).toHaveLength(1);
-    // 185 * (1 + 5/30)
-    expect(v.trend[0].e1rmLb).toBeCloseTo(215.83, 2);
+    expect(v.sessions[0].summary).toBe("1 set · 925 lb");
   });
 
-  it("yields a session with no trend point when it was warmups only", () => {
-    const v = buildExerciseView(payload({
-      history: [{ date: "2026-10-23", sets: [set({ isWarmup: true })] }],
-    }));
-
-    expect(v.sessions).toHaveLength(1);
-    expect(v.sessions[0].volumeLb).toBe(0);
-    expect(v.trend).toEqual([]);
-    expect(v.peakE1rmLb).toBeNull();
-  });
-
-  it("drops a set outside Epley's reliable rep range from the trend but not the history", () => {
-    const v = buildExerciseView(payload({
-      history: [{ date: "2026-10-23", sets: [set({ reps: 20, weightLb: 95 })] }],
-    }));
-
-    expect(v.sessions[0].sets).toHaveLength(1);
-    expect(v.sessions[0].volumeLb).toBe(95 * 20);
-    expect(v.trend).toEqual([]);
-  });
-
-  it("reverses the trend to oldest-first while leaving the history newest-first", () => {
+  it("summarises a session in words, with grouped thousands", () => {
     const v = buildExerciseView(payload({
       history: [
-        { date: "2026-10-23", sets: [set({ weightLb: 185 })] },
-        { date: "2026-10-18", sets: [set({ weightLb: 180 })] },
-        { date: "2026-10-13", sets: [set({ weightLb: 175 })] },
+        session("2026-10-23", [set(), set(), set(), set({ reps: 5, weightLb: 185 })]),
+        session("2026-10-20", [set({ isWarmup: true })]),
+        session("2026-10-18", [set({ weightLb: 0, reps: 12 }), set({ weightLb: 0, reps: 10 })]),
       ],
     }));
-
-    expect(v.sessions.map((s) => s.date)).toEqual(["2026-10-23", "2026-10-18", "2026-10-13"]);
-    expect(v.trend.map((p) => p.date)).toEqual(["2026-10-13", "2026-10-18", "2026-10-23"]);
-    // Improving, so the change must read positive — this is the assertion that
-    // fails if anyone "tidies up" the reverse().
-    expect(v.changePct).toBeGreaterThan(0);
-    expect(v.changePct).toBeCloseTo(((185 - 175) / 175) * 100, 6);
+    expect(v.sessions.map((s) => s.summary)).toEqual([
+      "4 sets · 3,700 lb",
+      "Warmups only",
+      "2 sets",
+    ]);
   });
 
-  it("reports a decline as negative", () => {
+  it("carries the workout id through, and null from an older server", () => {
     const v = buildExerciseView(payload({
-      history: [
-        { date: "2026-10-23", sets: [set({ weightLb: 170 })] },
-        { date: "2026-10-18", sets: [set({ weightLb: 185 })] },
-      ],
+      history: [session("2026-10-23", [set()], "w-1"), session("2026-10-20", [set()])],
     }));
-    expect(v.changePct).toBeLessThan(0);
+    expect(v.sessions.map((s) => s.workoutId)).toEqual(["w-1", null]);
   });
 
-  it("gives no percentage from a single trend point", () => {
+  it("puts the PR flag on the right history row", () => {
     const v = buildExerciseView(payload({
-      history: [{ date: "2026-10-23", sets: [set()] }],
+      exercise: CURL,
+      history: [session("2026-10-23", [set({ weightLb: 55 })]), session("2026-10-20", [set({ weightLb: 50 })])],
     }));
-    expect(v.trend).toHaveLength(1);
-    expect(v.changePct).toBeNull();
-    expect(v.peakE1rmLb).not.toBeNull();
-  });
-
-  it("does not divide by zero on a bodyweight-at-zero first session", () => {
-    const v = buildExerciseView(payload({
-      history: [
-        { date: "2026-10-23", sets: [set({ weightLb: 20 })] },
-        { date: "2026-10-18", sets: [set({ weightLb: 0 })] },
-      ],
-    }));
-    expect(v.changePct).toBeNull();
-    expect(Number.isFinite(v.peakE1rmLb ?? NaN)).toBe(true);
-  });
-
-  it("takes the peak from the window, not from the newest session", () => {
-    const v = buildExerciseView(payload({
-      history: [
-        { date: "2026-10-23", sets: [set({ weightLb: 170 })] },
-        { date: "2026-10-18", sets: [set({ weightLb: 200 })] },
-      ],
-    }));
-    expect(v.peakE1rmLb).toBeCloseTo(200 * (1 + 5 / 30), 6);
-  });
-});
-
-describe("barHeightPct", () => {
-  it("scales against the peak", () => {
-    expect(barHeightPct(100, 200)).toBe(50);
-    expect(barHeightPct(200, 200)).toBe(100);
-  });
-
-  it("floors at 8 so a small bar is still a visible mark", () => {
-    expect(barHeightPct(1, 1000)).toBe(8);
-  });
-
-  it("does not divide by a null or zero peak", () => {
-    expect(barHeightPct(100, null)).toBe(8);
-    expect(barHeightPct(100, 0)).toBe(8);
+    expect(v.sessions.map((s) => s.pr)).toEqual([true, false]);
   });
 });
 
 /**
- * The cue on the detail screen.
- *
- * `GET /api/mobile/exercise?id=` has returned this field since the cue backend
- * landed, and nothing consumed it — the route's comment claimed this screen
- * rendered it while the screen had no reference to the field. These pin the
- * consumption so it cannot quietly fall out again.
+ * The cue on the detail screen. These pin the consumption so it cannot quietly
+ * fall out again.
  */
 describe("the carry-forward cue", () => {
   it("carries the owner's own words through, line breaks and all", () => {
@@ -179,14 +415,10 @@ describe("the carry-forward cue", () => {
   });
 
   it("is null when the server predates the field entirely", () => {
-    // The field is optional on the wire type. `undefined` reaching a <Text>
-    // renders nothing but is not something to rely on.
     expect(buildExerciseView(payload()).cue).toBeNull();
   });
 
   it("folds an empty string to null rather than drawing an empty block", () => {
-    // The server never stores "" — absence is its only representation of "no
-    // cue" — so if one arrives it means the same thing.
     expect(buildExerciseView(payload({ cue: "" })).cue).toBeNull();
   });
 });

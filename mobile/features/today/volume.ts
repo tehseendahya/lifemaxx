@@ -26,7 +26,7 @@ import { LOAD_WEEKS, formatShortDate, plural, shiftIso } from "./model";
  * week is the same data in the shape the ranking already uses.
  *
  * So: sets per muscle for the last 7 days, each against the productive range,
- * plus an 8-week calendar of lift days. Both answer "what's the y axis" by not
+ * plus an 8-week calendar of lift days (now drawn by "This month"). Both answer "what's the y axis" by not
  * having one — the first is a meter with its band labelled in words above it,
  * the second is a heatmap where a cell is a day.
  *
@@ -76,16 +76,28 @@ export const GRID_WEEKS = LOAD_WEEKS;
 const WEEKDAY_INITIALS = ["M", "T", "W", "T", "F", "S", "S"] as const;
 
 /**
- * The two sentences under the card's label, always rendered.
+ * The one line under the card's label, always rendered.
  *
- * This is the literal fix for the complaint and is not an optional nicety. The
- * figure is a weighted sum, which is not guessable from a label, and the band
- * is an opinion the app holds, which is not guessable from a shaded rectangle.
- * "MEV", "MAV" and "MRV" are deliberately absent: the owner is not reading
- * Israetel, and "the productive range" is the same information in words they
- * already use.
+ * It used to be the two sentences now in `VOLUME_HOW_COUNTED`, permanently on
+ * screen. That was the literal fix for "what's the y axis", and it worked — but
+ * a paragraph of method above the rows every single day is the card explaining
+ * itself to someone who already read it. So the band is named in one line and
+ * the weighting is one tap away.
  */
 export const VOLUME_EXPLAINER =
+  `Weekly working sets per muscle against the ${WEEKLY_SET_TARGET.min}–${WEEKLY_SET_TARGET.max} `
+  + "productive range.";
+
+/**
+ * What "How it's counted" expands to.
+ *
+ * The figure is a weighted sum, which is not guessable from a label, and the
+ * band is an opinion the app holds, which is not guessable from a shaded
+ * rectangle. "MEV", "MAV" and "MRV" are deliberately absent: the owner is not
+ * reading Israetel, and "the productive range" is the same information in words
+ * they already use.
+ */
+export const VOLUME_HOW_COUNTED =
   "Working sets weighted by how much each lift trains the muscle — a bench press "
   + "counts 1 chest, ½ front delt, ½ tricep. "
   + `The band is ${WEEKLY_SET_TARGET.min}–${WEEKLY_SET_TARGET.max} sets a week, `
@@ -130,7 +142,10 @@ export interface LiftDayGrid {
 }
 
 export interface VolumeBlock {
+  /** One line, always on screen. */
   explainer: string;
+  /** The long version, behind the "How it's counted" toggle. */
+  howCounted: string;
   /** Empty in both empty states; `note` carries the card instead. */
   rows: VolumeRow[];
   /** The band, restated so the screen needs no import of its own. */
@@ -144,8 +159,6 @@ export interface VolumeBlock {
   footer: string | null;
   /** Replaces the rows. Null in the ordinary case. */
   note: string | null;
-  /** Null only when there is nothing in 56 days either. */
-  grid: LiftDayGrid | null;
   /** The one primary action. Both destinations are the Lift tab. */
   navLabel: string;
 }
@@ -199,8 +212,7 @@ export function volumeBlock(b: Bootstrap): VolumeBlock {
     ? liftDays.reduce((latest, d) => (d.date > latest ? d.date : latest), liftDays[0].date)
     : null;
 
-  const grid = liftDayGrid(b);
-  const everLifted = grid.days > 0 || lastLiftDate !== null;
+  const everLifted = lastLiftDate !== null;
 
   let note: string | null = null;
   if (rows.length === 0) {
@@ -208,8 +220,8 @@ export function volumeBlock(b: Bootstrap): VolumeBlock {
       /*
        * The owner's state whenever their one session is more than a week old.
        * It must not read as "you have no data" — they have data, it is just
-       * outside this window, and the grid underneath is the panel that has
-       * something to say in exactly this case.
+       * outside this window, and the lift-day grid in "This month" is the
+       * panel that has something to say in exactly this case.
        */
       ? `Nothing in the last 7 days. Your last session was ${formatShortDate(lastLiftDate)}.`
       : "Nothing logged yet. Log a session and every muscle you trained appears here "
@@ -218,6 +230,7 @@ export function volumeBlock(b: Bootstrap): VolumeBlock {
 
   return {
     explainer: VOLUME_EXPLAINER,
+    howCounted: VOLUME_HOW_COUNTED,
     rows,
     min,
     max,
@@ -229,7 +242,6 @@ export function volumeBlock(b: Bootstrap): VolumeBlock {
     ],
     footer: rows.length === 0 ? null : footerFor(ranked, rows),
     note,
-    grid: everLifted ? grid : null,
     navLabel: everLifted ? "What to train next →" : "Start a lift →",
   };
 }
@@ -265,6 +277,11 @@ function footerFor(
 /**
  * Eight Monday-start weeks of "did I lift", as a calendar.
  *
+ * Rendered by Today's "This month" card, not by sets-per-muscle any more: the
+ * two answer different questions ("where did this week's sets land" against
+ * "am I turning up"), and stacking them in one card was what made it read as
+ * one long, unclear thing.
+ *
  * A heatmap rather than a bar chart because it has no y axis to misread — which
  * is the complaint this whole card answers. A cell is a day; it is filled or it
  * is not. With one logged session that is one filled cell in fifty-six and the
@@ -276,7 +293,7 @@ function footerFor(
  * `weekStartOf(today)` is at most 6 days before today, so the earliest cell is
  * at worst `today − 55` — the window's first day.
  */
-function liftDayGrid(b: Bootstrap): LiftDayGrid {
+export function liftDayGrid(b: Bootstrap): LiftDayGrid {
   const lifted = new Set(
     b.history.days.filter((d) => d.hardSets > 0).map((d) => d.date),
   );

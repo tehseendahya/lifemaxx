@@ -14,9 +14,13 @@ import { MealCapture } from "./MealCapture";
 import { MealRow } from "./MealRow";
 import { MealSheet } from "./MealSheet";
 import {
-  analyzedFromMealItems, asMealSlot, formatIsoDateLabel, relativeDayLabel,
+  analyzedFromMealItems, asMealSlot, formatIsoDateLabel, relativeDayLabel, updatePayload,
+  type MealDraft,
 } from "./model";
-import { OFFLINE_SAVE, deleteMeal, describeFailure, saveMeal } from "./requests";
+import {
+  OFFLINE_EDIT, OFFLINE_SAVE,
+  deleteMeal, describeFailure, saveMeal, updateMeal,
+} from "./requests";
 import { useFoodDay } from "./useFoodDay";
 
 const styles = StyleSheet.create({
@@ -43,6 +47,7 @@ export default function FoodScreen() {
   const [openMeal, setOpenMeal] = useState<MealDto | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   /** One line under the capture card: "Added to today." after a repeat. */
   const [notice, setNotice] = useState<string | null>(null);
@@ -96,6 +101,31 @@ export default function FoodScreen() {
       tapError();
       setActionError(describeFailure(err, OFFLINE_SAVE));
     } finally {
+      setActionBusy(false);
+    }
+  }
+
+  /**
+   * Save the item editor's draft: items replaced, totals recomputed by the
+   * server. A direct call, not the outbox — on failure the sheet stays open
+   * with the error and every edit intact.
+   */
+  async function saveEdit(meal: MealDto, draft: MealDraft) {
+    setActionBusy(true);
+    setSaving(true);
+    setActionError(null);
+    try {
+      await updateMeal(updatePayload(meal.id, draft));
+      tapDone();
+      // The meal lives on the day being viewed, and today's fuel card reads
+      // the same meals through `bootstrap`; `invalidateDay` refreshes both.
+      day.invalidateDay();
+      setOpenMeal(null);
+    } catch (err) {
+      tapError();
+      setActionError(describeFailure(err, OFFLINE_EDIT));
+    } finally {
+      setSaving(false);
       setActionBusy(false);
     }
   }
@@ -182,16 +212,16 @@ export default function FoodScreen() {
       ) : null}
 
       {/*
-        The one place the owner can see what they ate, and the app's only
-        confirmation mechanism. A destructive action behind an `Alert.alert`
-        would be the system interrupting the user in the system typeface; this
-        is the app continuing, with 56pt targets — and now with the meal's
-        items above them, which is what the tap was always supposed to show.
+        Tapping a meal opens its item editor: edit is the primary action (the
+        owner's call), with Repeat and Delete beneath it. Confirmations happen
+        inline in the sheet, never in an `Alert.alert`.
       */}
       <MealSheet
         meal={openMeal}
         busy={actionBusy}
+        saving={saving}
         error={actionError}
+        onSave={(meal, draft) => { void saveEdit(meal, draft); }}
         onRepeat={(meal) => { void repeat(meal); }}
         onRemove={(meal) => { void remove(meal); }}
         onClose={closeDetail}

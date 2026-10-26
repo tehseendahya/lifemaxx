@@ -15,6 +15,7 @@ import { getCues } from "@/lib/cues";
 import { summarize } from "@/lib/domain/readiness";
 import { displayLb } from "@/lib/domain/units";
 import { bestE1rm } from "@/lib/domain/e1rm";
+import { E1RM_SLUGS } from "@/lib/domain/big-lifts";
 
 /**
  * Everything the phone needs, in one request.
@@ -25,7 +26,7 @@ import { bestE1rm } from "@/lib/domain/e1rm";
  * means six chances to be holding half a dashboard.
  *
  * `history` is the one field added for the Today dashboard, and it is raw for
- * the same reason: 56 daily rows plus up to three e1RM series, with every
+ * the same reason: 56 daily rows plus up to four e1RM series (barbell main lifts only), with every
  * streak, weekly bucket, rolling mean and lift-day count left to pure functions
  * on the device. A server-computed streak would be a second implementation of a
  * rule the client has to be able to render anyway, and the two would disagree
@@ -81,7 +82,9 @@ export const GET = route(async ({ userId, tz, today }) => {
     getBodyweightSeries(userId, today),
     getDailyIntake(userId, shiftDate(today, -HISTORY_LOOKBACK_DAYS)),
     getDailyHardSets(userId, today),
-    getMainLiftE1rmSeries(userId, today),
+    // Barbell main lifts only. See `domain/big-lifts` for why a curl's e1RM is
+    // not a number the Big lifts card should ever show.
+    getMainLiftE1rmSeries(userId, today, { slugs: E1RM_SLUGS }),
 
     /*
      * The per-exercise cues, for the same reason `lastSets` is here: a cue is

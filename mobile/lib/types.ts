@@ -156,7 +156,11 @@ export interface MainLiftSeries {
 
 export interface HistoryDto {
   days: HistoryDay[];
-  /** Up to 3 lifts, by distinct session count desc then name asc. Deterministic. */
+  /**
+   * Up to 4 lifts, by distinct session count desc then name asc. Deterministic.
+   * Barbell main lifts only (`E1RM_SLUGS` in `lib/shared/big-lifts`): an older
+   * server sent any lift, up to 3, so a client must not assume the filter.
+   */
   mainLifts: MainLiftSeries[];
 }
 
@@ -267,7 +271,16 @@ export interface ExerciseHistory {
     incrementLb: number;
     equipment: string;
   };
-  history: { date: string; sets: HistorySet[] }[];
+  history: {
+    /**
+     * The workout this session belongs to, so a history row can open it.
+     * Optional because a server that predates the field does not send it, and
+     * a row without one simply is not pressable.
+     */
+    workoutId?: string;
+    date: string;
+    sets: HistorySet[];
+  }[];
   /**
    * This lift's carry-forward cue, or null. Same value as `bootstrap`'s
    * `cues[id]`, re-sent here because this is the screen that edits it: a

@@ -25,7 +25,21 @@ import {
   slotForHour,
   toAnalyzed,
   toDraft,
+  EMPTY_MEAL_HINT,
+  appendItems,
+  canSaveEdit,
+  draftFromMeal,
+  editorHeadline,
+  formatQty,
+  isDirty,
+  isScratchUri,
+  sameItems,
+  saveBlockedReason,
+  scaleItem,
+  updatePayload,
   type AnalyzedItem,
+  type DraftItem,
+  type MealDraft,
 } from "./model";
 import type { MealDto } from "../../lib/types";
 
@@ -465,5 +479,158 @@ describe("the breakdown behind the row", () => {
   it("names a blank item the same way the save does", () => {
     const blank = { name: "  ", qty: null, unit: null, kcal: 10, proteinG: 0, carbsG: 0, fatG: 1 };
     expect(mealDetail({ ...dinner, items: [...dinner.items, blank] }).items[6].name).toBe("Item");
+  });
+});
+
+// ------------------------------------------------------------ item editing
+
+const chicken = (): DraftItem => ({
+  key: "k1", name: "Chicken thigh", qty: 200, unit: "g",
+  kcal: 410, proteinG: 46, carbsG: 0, fatG: 24,
+});
+
+describe("scaleItem", () => {
+  it("rescales all four macros proportionally: 200 g → 300 g is ×1.5", () => {
+    const scaled = scaleItem(chicken(), 300);
+    expect(scaled.qty).toBe(300);
+    expect(scaled.kcal).toBe(615);
+    expect(scaled.proteinG).toBe(69);
+    expect(scaled.carbsG).toBe(0);
+    expect(scaled.fatG).toBe(36);
+    expect(scaled.key).toBe("k1");
+    expect(scaled.name).toBe("Chicken thigh");
+  });
+
+  it("rounds kcal to an integer and grams to a tenth", () => {
+    const rice: DraftItem = { key: "r", name: "Rice", qty: 1.5, unit: "cup", kcal: 307, proteinG: 6.4, carbsG: 67.3, fatG: 0.6 };
+    const scaled = scaleItem(rice, 1);
+    expect(scaled.kcal).toBe(205); // 204.67
+    expect(Number.isInteger(scaled.kcal)).toBe(true);
+    expect(scaled.proteinG).toBe(4.3); // 4.2667
+    expect(scaled.carbsG).toBe(44.9); // 44.867
+    expect(scaled.fatG).toBe(0.4);
+  });
+
+  it("records a first quantity without scaling when there was none", () => {
+    const typed: DraftItem = { ...chicken(), qty: null };
+    const set = scaleItem(typed, 150);
+    expect(set.qty).toBe(150);
+    expect(set.kcal).toBe(410);
+    expect(set.proteinG).toBe(46);
+    expect(set.fatG).toBe(24);
+  });
+
+  it("refuses a zero or non-finite quantity rather than erasing the macros", () => {
+    expect(scaleItem(chicken(), 0)).toEqual(chicken());
+    expect(scaleItem(chicken(), Number.NaN)).toEqual(chicken());
+  });
+
+  it("does not mutate the item it was given", () => {
+    const original = chicken();
+    scaleItem(original, 400);
+    expect(original).toEqual(chicken());
+  });
+});
+
+describe("formatQty", () => {
+  it("shows the portion, or a dash when there is none", () => {
+    expect(formatQty({ qty: 200, unit: "g" })).toBe("200 g");
+    expect(formatQty({ qty: 1.5, unit: "cup" })).toBe("1.5 cup");
+    expect(formatQty({ qty: 2, unit: null })).toBe("2");
+    expect(formatQty({ qty: null, unit: "g" })).toBe("—");
+  });
+});
+
+const loggedMeal: MealDto = {
+  id: "m1", slot: "lunch", note: "about 2 cups of rice", source: "photo", confidence: 0.7,
+  kcal: 718, proteinG: 52.4, carbsG: 67.3, fatG: 24.6,
+  items: [
+    { name: "Chicken thigh", qty: 200, unit: "g", kcal: 410, proteinG: 46, carbsG: 0, fatG: 24 },
+    { name: "White rice", qty: 1.5, unit: "cup", kcal: 308, proteinG: 6.4, carbsG: 67.3, fatG: 0.6 },
+  ],
+};
+
+describe("dirty detection", () => {
+  it("an untouched draft is clean, even with fresh React keys", () => {
+    const a = draftFromMeal(loggedMeal);
+    const b = draftFromMeal(loggedMeal);
+    expect(a.items[0].key).not.toBe(b.items[0].key);
+    expect(isDirty(a, b)).toBe(false);
+    expect(canSaveEdit(a, b)).toBe(false);
+  });
+
+  it("notices a slot, a note, a quantity, a macro, a name, a delete and an add", () => {
+    const o = draftFromMeal(loggedMeal);
+    const edits: MealDraft[] = [
+      { ...o, slot: "dinner" },
+      { ...o, note: "3 cups" },
+      { ...o, items: o.items.map((i, n) => (n === 0 ? scaleItem(i, 300) : i)) },
+      { ...o, items: o.items.map((i, n) => (n === 1 ? { ...i, carbsG: 70 } : i)) },
+      { ...o, items: o.items.map((i, n) => (n === 0 ? { ...i, name: "Chicken breast" } : i)) },
+      { ...o, items: o.items.slice(1) },
+      { ...o, items: appendItems(o.items, [{ name: "Coke Zero", qty: 1, unit: "can", kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0 }]) },
+    ];
+    for (const d of edits) expect(isDirty(o, d)).toBe(true);
+    for (const d of edits.slice(0, -2)) expect(canSaveEdit(o, d)).toBe(true);
+  });
+
+  it("ignores whitespace that would be trimmed on save anyway", () => {
+    const o = draftFromMeal(loggedMeal);
+    const d = { ...o, note: `${o.note}  `, items: o.items.map((i) => ({ ...i, name: ` ${i.name} ` })) };
+    expect(isDirty(o, d)).toBe(false);
+  });
+
+  it("sameItems compares content, not keys", () => {
+    const o = draftFromMeal(loggedMeal);
+    expect(sameItems(o.items, o.items.map((i) => ({ ...i, key: "other" })))).toBe(true);
+    expect(sameItems(o.items, o.items.slice(0, 1))).toBe(false);
+  });
+});
+
+describe("saving an edited meal", () => {
+  it("blocks an empty meal with words that point at Delete", () => {
+    const o = draftFromMeal(loggedMeal);
+    const empty = { ...o, items: [] };
+    expect(saveBlockedReason(empty)).toBe(EMPTY_MEAL_HINT);
+    expect(isDirty(o, empty)).toBe(true);
+    expect(canSaveEdit(o, empty)).toBe(false);
+    expect(saveBlockedReason(o)).toBeNull();
+  });
+
+  it("builds the POST /api/mobile/meal body in snake_case, with no image", () => {
+    const o = draftFromMeal(loggedMeal);
+    const d = { ...o, slot: "dinner" as const, note: " 3 cups ", items: [scaleItem(o.items[0], 300)] };
+    const body = updatePayload("m1", d);
+    expect(body).toEqual({
+      id: "m1",
+      slot: "dinner",
+      note: "3 cups",
+      items: [{ name: "Chicken thigh", qty: 300, unit: "g", kcal: 615, protein_g: 69, carbs_g: 0, fat_g: 36 }],
+    });
+    expect(JSON.stringify(body)).not.toMatch(/image|data:/i);
+  });
+
+  it("draftFromMeal narrows an unknown slot instead of passing it through", () => {
+    expect(draftFromMeal({ ...loggedMeal, slot: "brunch" }).slot).toBe("snack");
+  });
+});
+
+describe("editorHeadline", () => {
+  it("is the live total of the draft, not the stored one", () => {
+    const o = draftFromMeal(loggedMeal);
+    expect(editorHeadline("lunch", o.items)).toBe("Lunch · 718 kcal · 52 P · 67 C · 25 F");
+    expect(editorHeadline("lunch", [scaleItem(o.items[0], 300)])).toBe("Lunch · 615 kcal · 69 P · 0 C · 36 F");
+  });
+});
+
+describe("isScratchUri", () => {
+  const cache = "file:///var/mobile/Containers/Data/Application/X/Library/Caches/";
+  it("allows files inside the app cache only", () => {
+    expect(isScratchUri(`${cache}ImagePicker/abc.jpg`, cache)).toBe(true);
+    expect(isScratchUri(`${cache}ImagePicker/abc.jpg`, cache.slice(0, -1))).toBe(true);
+    expect(isScratchUri("file:///var/mobile/Media/DCIM/100APPLE/IMG_0001.JPG", cache)).toBe(false);
+    expect(isScratchUri(`${cache}../Documents/x.jpg`, cache)).toBe(false);
+    expect(isScratchUri("ph://ABC-123", cache)).toBe(false);
+    expect(isScratchUri(`${cache}a.jpg`, "")).toBe(false);
   });
 });

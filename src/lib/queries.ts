@@ -220,9 +220,12 @@ export async function getExerciseHistory(userId: string, exerciseId: string, lim
     ))
     .orderBy(desc(workouts.localDate), sets.setIndex);
 
-  const grouped = new Map<string, { date: string; sets: typeof rows }>();
+  // Keyed by workout, and the key is handed back: the detail screen opens the
+  // workout a history row came from, and two sessions on one date are two rows.
+  const grouped = new Map<string, { workoutId: string; date: string; sets: typeof rows }>();
   for (const r of rows) {
-    const g = grouped.get(r.workoutId) ?? { date: r.localDate, sets: [] as typeof rows };
+    const g = grouped.get(r.workoutId)
+      ?? { workoutId: r.workoutId, date: r.localDate, sets: [] as typeof rows };
     g.sets.push(r);
     grouped.set(r.workoutId, g);
   }
@@ -515,16 +518,30 @@ export interface MainLiftSeries {
  * disagree about what a session was worth — and it is also why a session of
  * nothing but high-rep work drops out entirely instead of plotting a lie.
  *
- * Ordering is `distinct sessions desc, name asc`, so the three rows are stable
+ * Ordering is `distinct sessions desc, name asc`, so the rows are stable
  * across refreshes. Without the name tiebreak, two lifts trained the same
  * number of times would swap places between requests.
+ *
+ * `slugs` restricts the series to those lifts. Bootstrap passes `E1RM_SLUGS`
+ * (`domain/big-lifts`): without it the "most logged" lifts were whatever the
+ * owner did most, and a preacher curl's e1RM landed on the Big lifts card — a
+ * number nobody lifts and nobody chases. The filter is in SQL rather than
+ * applied to the result so `limit` counts only lifts that may be shown;
+ * filtering afterwards would let three curls use up the slots and leave an
+ * empty card. `null` keeps the any-lift behaviour; an empty list returns
+ * nothing without a query, because `IN ()` is not valid SQL.
  */
 export async function getMainLiftE1rmSeries(
   userId: string,
   today: string,
-  lookbackDays = HISTORY_LOOKBACK_DAYS,
-  limit = 3,
+  {
+    lookbackDays = HISTORY_LOOKBACK_DAYS,
+    limit = 4,
+    slugs = null,
+  }: { lookbackDays?: number; limit?: number; slugs?: readonly string[] | null } = {},
 ): Promise<MainLiftSeries[]> {
+  if (slugs !== null && slugs.length === 0) return [];
+
   const rows = await db
     .select({
       exerciseId: sets.exerciseId,
@@ -541,6 +558,7 @@ export async function getMainLiftE1rmSeries(
       eq(workouts.userId, userId),
       eq(workouts.status, "completed"),
       gte(workouts.localDate, shiftDate(today, -lookbackDays)),
+      slugs === null ? undefined : inArray(exercises.slug, [...slugs]),
     ));
 
   // (exercise, day) → that day's sets. A day rather than a workout id: two

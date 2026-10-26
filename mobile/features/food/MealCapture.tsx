@@ -1,14 +1,18 @@
-import { useState } from "react";
-import { StyleSheet, Text, TextInput, View } from "react-native";
+import { useRef, useState, type ComponentRef } from "react";
+import { Image, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
-import { Button, Card, Label, color, radius, space } from "@/components/ui";
+import { Button, Card, Label, color, hit, microLabel, radius, space } from "@/components/ui";
 import { tapDone, tapError, tapSelect } from "@/lib/haptics";
 
 import { ReviewCard } from "./ReviewCard";
-import { captureMealPhoto } from "./capture";
+import { captureMealPhoto, pickMealPhoto, type CaptureOutcome } from "./capture";
 import {
-  toDraft,
-  type AnalyzedItem, type DraftItem, type MealSlot, type MealSource,
+  analyzeInput, canLog, logButtonLabel, placeholderFor, savePayload, sourceFor,
+  type ComposePhoto,
+} from "./compose";
+import {
+  defaultSlot, sameItems, toAnalyzed, toDraft,
+  type DraftItem, type MealSlot, type MealSource,
 } from "./model";
 import {
   OFFLINE_ANALYSIS, OFFLINE_SAVE,
@@ -16,34 +20,43 @@ import {
 } from "./requests";
 
 /**
- * Photo or sentence → a reviewed, saved meal. The port of
- * `src/components/MealCapture.tsx`, same phases, same contracts.
+ * Caption + photo → one analysis → a reviewed, saved meal.
  *
- * ── THE IMAGE ───────────────────────────────────────────────────────────────
+ * ── COMPOSE FIRST, PARSE ONCE ───────────────────────────────────────────────
  *
- * The data URL is a local `const` inside `onPhoto` and is never put in state,
- * never passed as a prop and never logged. It exists between the camera
- * returning and `analyzeMeal` resolving, and then it is unreachable. That is
- * not an optimisation — it is the reason there is nothing to clean up when the
- * user cancels, backgrounds the app or force-quits mid-review, and it means no
- * amount of later editing in this component can accidentally retain a photo.
- * `capture.ts` deletes the two temp files the OS wrote on the way.
+ * The owner: "after uploading a photo, it immediately goes into the log add
+ * phase and you can't type more. I want it to be like a caption and a
+ * picture". So attaching a photo only attaches it. The caption stays editable
+ * (and is focused again when the camera closes), and LOG MEAL sends the photo
+ * and the caption together in one `/api/meals/analyze` call — which is what
+ * lets "plus a protein shake" become an item the photo could never show.
+ *
+ * ── THE PHOTO ───────────────────────────────────────────────────────────────
+ *
+ * `photo` is a data URL in React state and nowhere else: not React Query, not
+ * AsyncStorage, not SecureStore, not the outbox, not a file (`capture.ts`
+ * deletes the scratch files it came from). It is set to null on a successful
+ * save, on Cancel and on ✕; when this component unmounts its state goes with
+ * it, and there is no ref, cache or module variable holding a copy. It has to
+ * live in state now — RE-ESTIMATE re-sends the same photo with an edited
+ * caption — which is the reason the save body is built by `savePayload`, a
+ * function that names every field and is tested to carry no image.
  */
 
 /**
- * `capturing` and `analysing` are distinct because only one of them should put
- * "Reading…" on the button: while the system camera is up it covers the screen,
- * and coming back from a cancelled shot has to land on an idle card, not on a
- * card that claims to be working.
+ * `picking` and `analysing` are distinct because only one of them should put
+ * "Reading…" on the button: while the system camera or library is up it
+ * covers the screen, and coming back from a cancelled pick has to land on an
+ * idle composer, not on one that claims to be working.
  */
-type Phase = "idle" | "capturing" | "analysing" | "review" | "saving";
-
-const NOTE_PLACEHOLDER =
-  'What was it? Portion size matters more than the photo — "about 2 cups of rice, thigh not breast"';
+type Phase = "compose" | "picking" | "analysing" | "review" | "reestimating" | "saving";
 
 const styles = StyleSheet.create({
-  note: {
+  caption: {
     minHeight: 76,
+    // About five lines at 19pt, then it scrolls: the composer must not push
+    // LOG MEAL off a small screen however much is typed.
+    maxHeight: 114,
     paddingHorizontal: space.md,
     paddingTop: space.sm,
     paddingBottom: space.sm,
@@ -56,7 +69,20 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     textAlignVertical: "top",
   },
-  actions: { marginTop: space.md, gap: space.sm },
+  attached: { flexDirection: "row", alignItems: "center", gap: space.sm, marginTop: space.md },
+  thumb: { width: 64, height: 64, borderRadius: radius.md, backgroundColor: color.surface2 },
+  chip: {
+    minWidth: hit.min,
+    minHeight: hit.min,
+    paddingHorizontal: space.sm,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  chipGlyph: { color: color.muted, fontSize: 20 },
+  chipLabel: { ...microLabel, color: color.accent },
+  sources: { flexDirection: "row", gap: space.sm, marginTop: space.md },
+  source: { flex: 1 },
+  actions: { marginTop: space.md },
   hint: { color: color.muted, fontSize: 12, lineHeight: 17, marginTop: space.sm },
   bad: { color: color.bad, fontSize: 12, lineHeight: 17, marginTop: space.sm },
 });
@@ -68,178 +94,225 @@ export function MealCapture({ localDate, dayLabel, onSaved }: {
   dayLabel: string | null;
   onSaved: () => void;
 }) {
-  const [phase, setPhase] = useState<Phase>("idle");
-  const [note, setNote] = useState("");
-  const [items, setItems] = useState<DraftItem[] | null>(null);
-  const [confidence, setConfidence] = useState<number | null>(null);
-  const [source, setSource] = useState<MealSource>("photo");
+  const [phase, setPhase] = useState<Phase>("compose");
+  const [caption, setCaption] = useState("");
+  const [photo, setPhoto] = useState<ComposePhoto | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  /*
-   * Bumped on every analysis and used as the review card's `key`, so a second
-   * attempt gets a genuinely fresh card. Without it the card's `useState`
-   * initialisers would keep the first analysis's items — React does not re-run
-   * them when a prop changes.
-   */
-  const [captureId, setCaptureId] = useState(0);
+  // The review step. `analysed` is what the model returned, kept so the card
+  // can tell whether the user has corrected it (and warn before re-estimating).
+  const [items, setItems] = useState<DraftItem[]>([]);
+  const [analysed, setAnalysed] = useState<DraftItem[]>([]);
+  const [confidence, setConfidence] = useState<number | null>(null);
+  const [source, setSource] = useState<MealSource>("text");
+  const [slot, setSlot] = useState<MealSlot>(() => defaultSlot());
 
-  async function runAnalysis(input: { imageDataUrl?: string; note?: string }, from: MealSource) {
-    setPhase("analysing");
-    setError(null);
-    try {
-      const analysis = await analyzeMeal(input);
-      setItems(toDraft(analysis.items));
-      setConfidence(analysis.confidence);
-      setSource(from);
-      setCaptureId((id) => id + 1);
-      setPhase("review");
-    } catch (err) {
-      tapError();
-      setError(describeFailure(err, OFFLINE_ANALYSIS));
-      setPhase("idle");
-    }
-  }
+  const captionRef = useRef<ComponentRef<typeof TextInput>>(null);
 
-  async function onPhoto() {
+  async function attach(pick: () => Promise<CaptureOutcome>, deniedMessage: string) {
     tapSelect();
     setError(null);
-    setPhase("capturing");
+    setPhase("picking");
 
-    let outcome;
+    let outcome: CaptureOutcome;
     try {
-      outcome = await captureMealPhoto();
+      outcome = await pick();
     } catch {
       tapError();
-      setError("The camera could not be opened.");
-      setPhase("idle");
+      setError("The photo could not be opened.");
+      setPhase("compose");
       return;
     }
 
-    if (outcome.status === "cancelled") {
-      setPhase("idle");
-      return;
-    }
+    setPhase("compose");
+    if (outcome.status === "cancelled") return;
     if (outcome.status === "denied") {
       tapError();
-      // Not a dead end: the text path does not need the camera, and saying so
-      // is more use than telling the user a permission was refused.
-      setError("Camera access is off. Turn it on in Settings, or describe the meal and use Text only.");
-      setPhase("idle");
+      setError(deniedMessage);
       return;
     }
     if (outcome.status === "failed") {
       tapError();
       setError(outcome.message);
-      setPhase("idle");
       return;
     }
 
-    // The note goes up with the photo whenever there is one. The model cannot
-    // see portion mass or cooking oil, so a sentence beside the picture is
-    // worth more than the picture.
-    await runAnalysis(
-      { imageDataUrl: outcome.imageDataUrl, note: note.trim() === "" ? undefined : note.trim() },
-      "photo",
-    );
+    // Attached, NOT analysed. The caption is handed straight back so the user
+    // can say what the photo cannot show.
+    setPhoto({ dataUrl: outcome.imageDataUrl });
+    captionRef.current?.focus();
   }
 
-  async function onTextOnly() {
+  function dropPhoto() {
     tapSelect();
-    await runAnalysis({ note: note.trim() }, "text");
+    setPhoto(null);
   }
 
-  async function onSave(edited: AnalyzedItem[], slot: MealSlot) {
+  async function analyse(next: "review" | "reestimating") {
+    const state = { caption, photo };
+    if (!canLog(state)) return;
+    tapSelect();
+    setPhase(next === "review" ? "analysing" : "reestimating");
+    setError(null);
+    try {
+      const analysis = await analyzeMeal(analyzeInput(state));
+      const drafted = toDraft(analysis.items);
+      setItems(drafted);
+      setAnalysed(drafted);
+      setConfidence(analysis.confidence);
+      setSource(sourceFor(photo));
+      setPhase("review");
+    } catch (err) {
+      tapError();
+      setError(describeFailure(err, OFFLINE_ANALYSIS));
+      // A failed first analysis returns to the composer with the caption and
+      // the photo intact; a failed re-estimate stays on the review card with
+      // the items the user already had.
+      setPhase(next === "review" ? "compose" : "review");
+    }
+  }
+
+  async function onSave() {
     setPhase("saving");
     setError(null);
     try {
-      await saveMeal({
+      await saveMeal(savePayload({
         slot,
-        note: note.trim(),
+        caption,
         source,
         confidence,
-        // Omitted for today, so the route's own notion of the date wins. Set
-        // only when the user has stepped the list back to an earlier day, which
-        // is what makes back-filling work.
-        localDate: localDate ?? undefined,
-        items: edited,
-      });
+        // Null for today, so the route's own notion of the date wins. Set only
+        // when the user has stepped the list back to an earlier day.
+        localDate,
+        items: toAnalyzed(items),
+      }));
       tapDone();
-      setItems(null);
-      setNote("");
+      setPhoto(null);
+      setCaption("");
+      setItems([]);
+      setAnalysed([]);
       setConfidence(null);
-      setPhase("idle");
+      setSlot(defaultSlot());
+      setPhase("compose");
       onSaved();
     } catch (err) {
       tapError();
       setError(describeFailure(err, OFFLINE_SAVE));
-      // Back to review, not to idle: the card stays mounted and keeps every
-      // edit, so a retry does not cost the user their corrections.
+      // Back to review, not to compose: every edit survives for the retry.
       setPhase("review");
     }
   }
 
   function onCancel() {
     tapSelect();
-    setItems(null);
+    setPhoto(null);
+    setItems([]);
+    setAnalysed([]);
     setConfidence(null);
     setError(null);
-    setPhase("idle");
+    setPhase("compose");
     /*
-     * The note is deliberately kept. The commonest reason to cancel a review is
-     * that the estimate was poor, and the fix the card itself recommends is a
-     * sentence about portion size — so throwing away what the user already
-     * typed would make the recovery path longer than the original one. The
-     * image is already gone: it was never stored anywhere to begin with.
+     * The caption is deliberately kept. The commonest reason to cancel a review
+     * is that the estimate was poor, and the fix is a better sentence — so
+     * throwing away what the user typed would lengthen the recovery path. The
+     * photo is dropped: cancelling is the user saying this attempt is over.
      */
   }
 
-  if ((phase === "review" || phase === "saving") && items !== null) {
+  if (phase === "review" || phase === "reestimating" || phase === "saving") {
     return (
       <ReviewCard
-        key={captureId}
-        initialItems={items}
+        photo={photo}
+        caption={caption}
+        onCaptionChange={setCaption}
+        items={items}
+        onItemsChange={setItems}
+        edited={!sameItems(analysed, items)}
         confidence={confidence}
-        note={note}
+        slot={slot}
+        onSlotChange={setSlot}
         saving={phase === "saving"}
+        reestimating={phase === "reestimating"}
         error={error}
-        onSave={onSave}
+        onSave={() => { void onSave(); }}
+        onReestimate={() => { void analyse("reestimating"); }}
         onCancel={onCancel}
       />
     );
   }
 
-  const busy = phase === "capturing" || phase === "analysing";
+  const busy = phase === "picking" || phase === "analysing";
 
   return (
     <Card>
-      <Label>Log a meal</Label>
+      <Label style={{ marginBottom: space.sm }}>Log a meal</Label>
 
       <TextInput
-        value={note}
-        onChangeText={setNote}
-        placeholder={NOTE_PLACEHOLDER}
+        ref={captionRef}
+        value={caption}
+        onChangeText={setCaption}
+        placeholder={placeholderFor(photo !== null)}
         placeholderTextColor={color.muted}
-        style={styles.note}
+        style={styles.caption}
         multiline
-        // The system keyboard belongs here and in the coach's field, and
-        // nowhere else in this app. A meal description is prose.
-        editable={!busy}
-        accessibilityLabel="What was the meal"
+        // Editable while a photo is attached — that is the whole change. Only
+        // the analysis itself locks it, because what is sent is what was typed.
+        editable={phase !== "analysing"}
+        accessibilityLabel="What did you eat"
       />
 
+      {photo !== null ? (
+        <View style={styles.attached}>
+          {/* RN `Image` from memory, not `expo-image`, which caches to disk. */}
+          <Image source={{ uri: photo.dataUrl }} style={styles.thumb} accessibilityLabel="Attached meal photo" />
+          <Pressable
+            onPress={dropPhoto}
+            disabled={busy}
+            style={styles.chip}
+            accessibilityRole="button"
+            accessibilityLabel="Remove the photo"
+          >
+            <Text style={styles.chipGlyph}>×</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => { void attach(captureMealPhoto, CAMERA_DENIED); }}
+            disabled={busy}
+            style={styles.chip}
+            accessibilityRole="button"
+            accessibilityLabel="Retake the photo"
+          >
+            <Text style={styles.chipLabel}>Retake</Text>
+          </Pressable>
+        </View>
+      ) : (
+        <View style={styles.sources}>
+          <Button
+            variant="secondary"
+            style={styles.source}
+            onPress={() => { void attach(captureMealPhoto, CAMERA_DENIED); }}
+            disabled={busy}
+          >
+            Camera
+          </Button>
+          <Button
+            variant="secondary"
+            style={styles.source}
+            onPress={() => { void attach(pickMealPhoto, LIBRARY_DENIED); }}
+            disabled={busy}
+          >
+            Library
+          </Button>
+        </View>
+      )}
+
       <View style={styles.actions}>
-        {/* 72pt, because this is the one button in the flow and it gets pressed
-            one-handed while holding a plate. */}
-        <Button size="hero" onPress={() => { void onPhoto(); }} disabled={busy}>
-          {phase === "analysing" ? "Reading…" : "Photo"}
-        </Button>
+        {/* The one primary button in the flow, pressed one-handed over a plate. */}
         <Button
-          variant="secondary"
-          size="lg"
-          onPress={() => { void onTextOnly(); }}
-          disabled={busy || note.trim() === ""}
+          size="hero"
+          onPress={() => { void analyse("review"); }}
+          disabled={busy || !canLog({ caption, photo })}
         >
-          {phase === "analysing" ? "Reading…" : "Text only"}
+          {logButtonLabel(phase === "analysing")}
         </Button>
       </View>
 
@@ -251,3 +324,8 @@ export function MealCapture({ localDate, dayLabel, onSaved }: {
     </Card>
   );
 }
+
+// Not dead ends: the caption path needs neither, and saying so beats reporting
+// a refused permission.
+const CAMERA_DENIED = "Camera access is off. Turn it on in Settings, pick from the library, or just describe the meal.";
+const LIBRARY_DENIED = "Photo access is off. Turn it on in Settings, use the camera, or just describe the meal.";
