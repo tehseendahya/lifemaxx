@@ -415,14 +415,18 @@ export function clockSecIn(sentence: string, distanceMi: number): number | null 
  * The exercise a sentence names, or nothing.
  *
  * EVERY token of a catalogue name (minus the four equipment words) has to
- * appear in the sentence. Among the rows that qualify, most matched tokens
- * wins, and a tie goes to the longer name — so "smith machine incline press"
- * beats "incline press" when both are present, and "bench" on its own matches
- * neither "Barbell Bench Press" nor anything else.
+ * appear in the sentence. Among the rows that qualify, the winner is decided by
+ * `rank` below — most matched tokens first, then whether the implement agrees
+ * with the sentence, then the barbell default, then the shorter name.
  *
- * That last part is a real cost: "bench 225" produces no claim and lands in
- * `rest`. It is the right cost. The alternative is a fuzzy match, and a gap
- * computed against the wrong lift is a number the owner would act on.
+ * The equipment steps exist because of a real bug. Stripping the equipment
+ * words reduces "Barbell Bench Press" and "Dumbbell Bench Press" to the same
+ * `{bench, press}`, both matched "205 bench press by December" with two tokens,
+ * and the old tie-break ("longer name wins") handed it to the dumbbell row by
+ * one character. Every downstream number — the gap, the pace, the Lift tab's
+ * goal chip — was then computed against a lift the owner does not do. Writing
+ * "barbell" in the sentence changed nothing, because only the catalogue side
+ * was ever looked at for equipment.
  *
  * ONE widening, added after the owner's "10 weighted pull ups with 45lb plate
  * by May" matched nothing: the sentence's word set also carries a singular form
@@ -430,27 +434,152 @@ export function clockSecIn(sentence: string, distanceMi: number): number | null 
  * "curls" reaches "Preacher Curl". The catalogue side is untouched and the
  * every-token rule still holds — this adds words to the haystack, it does not
  * relax the needle, so no sentence matches a name it does not contain.
+ *
+ * When no catalogue name matches in full, `nicknameMatch` gets one try with a
+ * four-row exact table ("bench", "squat", "deadlift"/"dl", "ohp"). This
+ * deliberately reverses the earlier rule that "bench 225" matched nothing:
+ * that is how the main lifts are actually written, and the table is narrow
+ * enough that it can only ever name the barbell lift the word means.
  */
 export function matchExercise(
   sentence: string,
   catalogue: CatalogueExercise[],
 ): CatalogueExercise | null {
   const words = withSingulars(tokenize(sentence));
-  let best: { exercise: CatalogueExercise; matched: number } | null = null;
+  const said = equipmentIn(words);
+  let best: { exercise: CatalogueExercise; rank: number[] } | null = null;
 
   for (const exercise of catalogue) {
-    const tokens = tokenize(exercise.name).filter((t) => !EQUIPMENT_WORDS.has(t));
+    const nameTokens = tokenize(exercise.name);
+    const tokens = nameTokens.filter((t) => !EQUIPMENT_WORDS.has(t));
     if (tokens.length === 0) continue;
     if (!tokens.every((t) => words.has(t))) continue;
 
-    const better =
-      best === null ||
-      tokens.length > best.matched ||
-      (tokens.length === best.matched && exercise.name.length > best.exercise.name.length);
-    if (better) best = { exercise, matched: tokens.length };
+    const rank = rankCandidate(nameTokens, tokens.length, words, said);
+    if (rank === null) continue;
+
+    // Strictly better only, so an exact tie keeps the earlier row: catalogue
+    // order is the last, deterministic, tie-break.
+    if (best === null || outranks(rank, best.rank)) best = { exercise, rank };
   }
 
-  return best?.exercise ?? null;
+  return best?.exercise ?? nicknameMatch(words, catalogue);
+}
+
+/**
+ * Sentence-side spellings of an implement. "db" and "bb" are how the owner's
+ * own aliases write them (see `src/db/catalogue.ts`), so a goal typed the same
+ * way has to read the same way.
+ */
+const EQUIPMENT_ALIASES = new Map([["db", "dumbbell"], ["bb", "barbell"]]);
+
+/** The implements the sentence names, normalised to the catalogue's words. */
+function equipmentIn(words: Set<string>): Set<string> {
+  const said = new Set<string>();
+  for (const w of words) {
+    if (EQUIPMENT_WORDS.has(w)) said.add(w);
+    else {
+      const alias = EQUIPMENT_ALIASES.get(w);
+      if (alias !== undefined) said.add(alias);
+    }
+  }
+  return said;
+}
+
+/**
+ * A candidate's sort key, higher is better at each position, or null when the
+ * candidate is ruled out.
+ *
+ *  1. Matched non-equipment tokens. "smith machine incline press" beats
+ *     "incline press" because it says more of what was written.
+ *  2. Equipment agreement. The sentence named an implement and this row names
+ *     a different one → REJECTED, not merely ranked lower: "80 dumbbell bench
+ *     press" must never fall back to the barbell lift just because the dumbbell
+ *     row is missing. Named and shared → a point.
+ *  3. The default implement. Nothing named → a row with no implement word, or
+ *     with "barbell", gets a point. "Bench press" means the barbell lift; that
+ *     is what every gym means by it.
+ *  4. Fewer name tokens left unsaid, i.e. the shorter name. This replaces
+ *     "longer name wins", which is the rule that picked the dumbbell row.
+ */
+function rankCandidate(
+  nameTokens: string[],
+  matched: number,
+  words: Set<string>,
+  said: Set<string>,
+): number[] | null {
+  const named = new Set(nameTokens.filter((t) => EQUIPMENT_WORDS.has(t)));
+
+  let agrees = 0;
+  if (said.size > 0 && named.size > 0) {
+    const shared = [...named].some((t) => said.has(t));
+    if (!shared) return null;
+    agrees = 1;
+  }
+
+  const isDefault = said.size === 0 && (named.size === 0 || (named.size === 1 && named.has("barbell")))
+    ? 1
+    : 0;
+
+  const unsaid = nameTokens.filter((t) => !words.has(t) && !said.has(t)).length;
+
+  return [matched, agrees, isDefault, -unsaid];
+}
+
+/** Lexicographic: the first position that differs decides. */
+function outranks(a: number[], b: number[]): boolean {
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return a[i] > b[i];
+  }
+  return false;
+}
+
+/**
+ * The four ways the main lifts get written without their full name, each to
+ * exactly one catalogue slug. Exact words only — no prefix, no fuzz. A `Map`
+ * rather than an object literal so a typed word like "constructor" cannot
+ * reach a prototype property.
+ */
+const NICKNAMES = new Map([
+  ["bench", "barbell-bench-press"],
+  ["squat", "back-squat"],
+  ["deadlift", "deadlift"],
+  ["dl", "deadlift"],
+  ["ohp", "overhead-press"],
+]);
+
+/**
+ * Words that mean the nickname is not the plain barbell lift. "incline bench"
+ * is not the bench press and "front squat" is not the back squat; if the
+ * catalogue had that variant the full-name pass would already have found it,
+ * so reaching here with a qualifier means the honest answer is nothing.
+ *
+ * "machine" and "cable" are added to the list the plan gave: they are the two
+ * remaining implement words, and "machine bench 200" reading as the barbell
+ * bench would be the same wrong-implement error this whole change fixes.
+ */
+const NICKNAME_QUALIFIERS = new Set([
+  "incline", "decline", "close", "smith", "dumbbell", "db", "front", "box",
+  "sumo", "romanian", "rdl", "trap", "machine", "cable",
+]);
+
+function nicknameMatch(
+  words: Set<string>,
+  catalogue: CatalogueExercise[],
+): CatalogueExercise | null {
+  for (const w of words) if (NICKNAME_QUALIFIERS.has(w)) return null;
+
+  const slugs = new Set<string>();
+  for (const w of words) {
+    const slug = NICKNAMES.get(w);
+    if (slug !== undefined) slugs.add(slug);
+  }
+  // "bench 225, squat 315" names two lifts. Picking one would attach both
+  // numbers to whichever won, so a sentence naming two gets neither.
+  if (slugs.size !== 1) return null;
+
+  const [slug] = slugs;
+  return catalogue.find((e) => e.slug === slug) ?? null;
 }
 
 /**
