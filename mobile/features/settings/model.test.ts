@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  MAX_WEIGHT_LB, MIN_WEIGHT_LB, buildMaintenance, buildWeighIn,
-  describeReachability, weightFromPad,
+  MAX_WEIGHT_LB, MIN_WEIGHT_LB, STRIP_DAYS, buildMaintenance, buildWeighIn,
+  describeReachability, targetSaveLabel, weighInStrip, weightFromPad, weightFromPadIn,
 } from "./model";
-import type { Bootstrap } from "../../lib/types";
+import type { Bootstrap, HistoryDay } from "../../lib/types";
 import type { TdeeResult } from "../../lib/shared/tdee";
 
 /**
@@ -15,6 +15,8 @@ import type { TdeeResult } from "../../lib/shared/tdee";
 function bootstrap(over: {
   tdee?: TdeeResult;
   targetKcal?: number | null;
+  mode?: string;
+  days?: HistoryDay[];
 }): Bootstrap {
   const tdee: TdeeResult = over.tdee ?? {
     status: "ok",
@@ -35,7 +37,7 @@ function bootstrap(over: {
       proteinG: 165,
       carbsG: 300,
       fatG: 80,
-      mode: over.targetKcal === null ? "calibrating" : "maintain",
+      mode: over.mode ?? (over.targetKcal === null ? "calibrating" : "maintain"),
     },
     totals: { kcal: 1375, proteinG: 79, carbsG: 115, fatG: 68 },
     mealCount: 2,
@@ -48,9 +50,12 @@ function bootstrap(over: {
     catalogue: [],
     lastSets: {},
     // Not what this suite is about; the Today dashboard owns `history`.
-    history: { days: [], mainLifts: [] },
+    history: { days: over.days ?? [], mainLifts: [] },
   };
 }
+
+const weighIn = (date: string, weightLb: number): HistoryDay =>
+  ({ date, weightLb, kcal: null, hardSets: 0 });
 
 const insufficient: TdeeResult = { status: "insufficient_data", weighIns: 5, needed: 8 };
 
@@ -78,10 +83,20 @@ describe("buildMaintenance", () => {
     expect(m.trend).toBe("+0.4 lb/wk");
   });
 
-  it("offers no proposal while a target is already set", () => {
-    const m = buildMaintenance(bootstrap({ targetKcal: 2600 }));
+  it("keeps the chips once a target is set, with the one in force marked", () => {
+    // They used to vanish here, because they could not save. Now they can, so
+    // they are how the target is changed.
+    const m = buildMaintenance(bootstrap({ targetKcal: 2600, mode: "cut" }));
     if (m.status !== "ok") throw new Error("unreachable");
-    expect(m.proposal).toBeNull();
+    expect(m.proposal.current).toBe("cut");
+    expect(m.proposal.note)
+      .toBe("Saving another replaces it from today. Earlier days keep the target they had.");
+  });
+
+  it("marks nothing while calibrating, even if the mode string says otherwise", () => {
+    const m = buildMaintenance(bootstrap({ targetKcal: null, mode: "cut" }));
+    if (m.status !== "ok") throw new Error("unreachable");
+    expect(m.proposal.current).toBeNull();
   });
 
   it("offers three options once maintenance is measured and no target exists", () => {
@@ -102,14 +117,18 @@ describe("buildMaintenance", () => {
     // 1.8 g/kg of the fitted bodyweight.
     expect(p.proteinG).toBe(148);
 
-    // The dead end is stated rather than implied: there is no endpoint that
-    // writes a targets row.
-    expect(p.note).toContain("laptop");
+    // The laptop dead end is gone: the chips save from here.
+    expect(p.current).toBeNull();
+    expect(p.note).toBe(
+      "Maintenance is measured. Pick one and save it — Food switches from calibrating "
+      + "to that number.",
+    );
+    expect(p.note).not.toContain("laptop");
   });
 
   it("describes each option by what it does to the scale, not just its kcal", () => {
     const m = buildMaintenance(bootstrap({ targetKcal: null }));
-    if (m.status !== "ok" || m.proposal === null) throw new Error("unreachable");
+    if (m.status !== "ok") throw new Error("unreachable");
 
     const byKey = Object.fromEntries(m.proposal.chips.map((c) => [c.key, c.detail]));
     expect(byKey.maintain).toMatch(/^2380 kcal · (hold|[+-]0\.0 lb\/wk)$/);
@@ -159,27 +178,41 @@ describe("buildWeighIn", () => {
     expect(v.hint).not.toContain("last");
   });
 
-  it("shows no figure below the floor, and says how far off it is", () => {
-    const v = buildWeighIn(bootstrap({ tdee: insufficient }), null);
-    expect(v.figure).toBe("—");
-    expect(v.hint).toBe("5 weigh-ins so far · 8 needed for a trend");
+  it("fits a trend on the phone from two weigh-ins, before TDEE is measured", () => {
+    const v = buildWeighIn(bootstrap({
+      tdee: insufficient,
+      days: [weighIn("2026-10-23", 183), weighIn("2026-10-24", 182), weighIn("2026-10-25", 182)],
+    }), null);
+    // The same fit Today's Body card prints: 181.83 at the last point.
+    expect(v.figure).toBe("181.8");
+    expect(v.hint).toBe("trend weight · from 3 weigh-ins");
   });
 
-  it("has a first-run line rather than a count of zero", () => {
+  it("names a single reading as a reading, with its date", () => {
+    const v = buildWeighIn(bootstrap({
+      tdee: { status: "insufficient_data", weighIns: 1, needed: 8 },
+      days: [weighIn("2026-10-22", 182.4)],
+    }), null);
+    expect(v.figure).toBe("182.4");
+    expect(v.hint).toBe("last weigh-in · 22 Oct");
+    expect(v.hint).not.toContain("trend");
+  });
+
+  it("says today for a reading taken today", () => {
+    const v = buildWeighIn(bootstrap({
+      tdee: { status: "insufficient_data", weighIns: 1, needed: 8 },
+      days: [weighIn("2026-10-25", 182)],
+    }), null);
+    expect(v.hint).toBe("last weigh-in · today");
+  });
+
+  it("has a first-run line with the one instruction that fixes it", () => {
     const v = buildWeighIn(
       bootstrap({ tdee: { status: "insufficient_data", weighIns: 0, needed: 8 } }),
       null,
     );
     expect(v.figure).toBe("—");
-    expect(v.hint).toBe("No weigh-in on record yet.");
-  });
-
-  it("singularises one weigh-in", () => {
-    const v = buildWeighIn(
-      bootstrap({ tdee: { status: "insufficient_data", weighIns: 1, needed: 8 } }),
-      null,
-    );
-    expect(v.hint).toContain("1 weigh-in so far");
+    expect(v.hint).toBe("No weigh-in yet. Weigh in tomorrow morning, before food.");
   });
 });
 
@@ -246,5 +279,60 @@ describe("describeReachability", () => {
     expect(describeReachability("unreachable", base)).toEqual({ text: "UNREACHABLE", tone: "bad" });
     expect(describeReachability("checking", base).tone).toBe("muted");
     expect(describeReachability("unknown", base).tone).toBe("muted");
+  });
+});
+
+describe("targetSaveLabel", () => {
+  const proposal = (mode?: string, kcal: number | null = null) => {
+    const m = buildMaintenance(bootstrap({ targetKcal: kcal, mode }));
+    if (m.status !== "ok") throw new Error("unreachable");
+    return m.proposal;
+  };
+
+  it("names the pick and its kcal", () => {
+    expect(targetSaveLabel(proposal(), "maintain")).toBe("SET MAINTAIN · 2380 KCAL");
+  });
+
+  it("offers nothing to save with no pick, or a pick of the target in force", () => {
+    expect(targetSaveLabel(proposal(), null)).toBeNull();
+    expect(targetSaveLabel(proposal("maintain", 2380), "maintain")).toBeNull();
+    expect(targetSaveLabel(proposal("maintain", 2380), "cut")).toMatch(/^SET CUT · \d+ KCAL$/);
+  });
+});
+
+describe("weighInStrip", () => {
+  it("is fourteen days ending today, oldest first, with today marked", () => {
+    const strip = weighInStrip(bootstrap({ days: [weighIn("2026-10-20", 182), weighIn("2026-10-25", 181)] }));
+    expect(strip).toHaveLength(STRIP_DAYS);
+    expect(strip[0].date).toBe("2026-10-12");
+    expect(strip[13]).toEqual({ date: "2026-10-25", on: true, today: true });
+    expect(strip.filter((d) => d.on).map((d) => d.date)).toEqual(["2026-10-20", "2026-10-25"]);
+    expect(strip.filter((d) => d.today)).toHaveLength(1);
+  });
+
+  it("is all empty on day one, with today still outlined", () => {
+    const strip = weighInStrip(bootstrap({}));
+    expect(strip.every((d) => !d.on)).toBe(true);
+    expect(strip[13].today).toBe(true);
+  });
+});
+
+describe("weightFromPadIn", () => {
+  it("is weightFromPad for pounds", () => {
+    expect(weightFromPadIn("182.4", "lb")).toEqual(weightFromPad("182.4"));
+  });
+
+  it("reads kilograms as kilograms and sends full-precision pounds", () => {
+    const entry = weightFromPadIn("82.5", "kg");
+    if (!entry.ok) throw new Error("unreachable");
+    // Not rounded: the server converts straight back, so 82.5 kg stays 82.5 kg.
+    expect(entry.weightLb / 2.2046226218).toBeCloseTo(82.5, 6);
+  });
+
+  it("checks the range in the unit that was typed", () => {
+    expect(weightFromPadIn("400", "kg")).toEqual({
+      ok: false, reason: "Enter a weight between 23 and 317 kg.",
+    });
+    expect(weightFromPadIn("", "kg")).toEqual({ ok: false, reason: null });
   });
 });

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { TODAY, bootstrap, day, ranked } from "./fixture";
-import { GRID_WEEKS, VOLUME_ROWS_MAX, volumeBlock } from "./volume";
+import { GRID_WEEKS, VOLUME_ROWS_MAX, liftDayGrid, volumeBlock } from "./volume";
 import type { RankedMuscle } from "../../lib/types";
 
 /**
@@ -134,12 +134,17 @@ describe("the domain", () => {
     ]);
   });
 
-  it("says in words what the weighting and the band are", () => {
-    // The literal answer to "what's the y axis", which is why it is not optional.
+  it("names the band in one line, always on screen", () => {
     expect(volumeBlock(bootstrap()).explainer)
-      .toContain("1 chest, ½ front delt, ½ tricep");
-    expect(volumeBlock(bootstrap()).explainer)
-      .toContain("The band is 10–20 sets a week, the productive range.");
+      .toBe("Weekly working sets per muscle against the 10–20 productive range.");
+  });
+
+  it("keeps the weighting one tap away rather than gone", () => {
+    // The literal answer to "what's the y axis". Moved behind a toggle, never
+    // deleted: the figure is a weighted sum and nothing on the row says so.
+    const v = volumeBlock(bootstrap());
+    expect(v.howCounted).toContain("1 chest, ½ front delt, ½ tricep");
+    expect(v.howCounted).toContain("The band is 10–20 sets a week, the productive range.");
   });
 });
 
@@ -155,7 +160,6 @@ describe("the empty states", () => {
       "Nothing logged yet. Log a session and every muscle you trained appears here "
       + "against the 10–20 set range.",
     );
-    expect(v.grid).toBeNull();
     expect(v.navLabel).toBe("Start a lift →");
     expect(v.footer).toBeNull();
   });
@@ -163,8 +167,9 @@ describe("the empty states", () => {
   it("names the last session rather than claiming there is no data", () => {
     /*
      * The owner's state whenever their one logged session is more than a week
-     * old. The per-muscle panel genuinely has nothing, and the grid underneath
-     * is the one panel that does — so this must not read as "you have no data".
+     * old. The per-muscle panel genuinely has nothing, and the lift-day grid in
+     * "This month" is the one panel that does — so this must not read as "you
+     * have no data".
      */
     const v = volumeBlock(bootstrap({
       volume: { summary: "", ranked: ownersRanked().map((r) => ({ ...r, setsLast7d: 0 })) },
@@ -173,7 +178,6 @@ describe("the empty states", () => {
 
     expect(v.rows).toEqual([]);
     expect(v.note).toBe("Nothing in the last 7 days. Your last session was 2 Oct.");
-    expect(v.grid).not.toBeNull();
     expect(v.navLabel).toBe("What to train next →");
   });
 
@@ -191,12 +195,11 @@ describe("the empty states", () => {
   });
 });
 
-describe("the lift-day grid", () => {
+describe("the lift-day grid (drawn by This month)", () => {
   it("is eight Monday-start weeks of seven cells, oldest first", () => {
-    const v = volumeBlock(bootstrap({
+    const grid = liftDayGrid(bootstrap({
       history: { days: [day("2026-09-03", { hardSets: 12 })], mainLifts: [] },
     }));
-    const grid = v.grid!;
 
     expect(grid.weeks).toHaveLength(GRID_WEEKS);
     expect(grid.weeks.every((w) => w.length === 7)).toBe(true);
@@ -209,14 +212,14 @@ describe("the lift-day grid", () => {
   });
 
   it("fills a day with a working set, greys a day without, draws nothing ahead", () => {
-    const v = volumeBlock(bootstrap({
+    const grid = liftDayGrid(bootstrap({
       today: "2026-10-21", // a Wednesday, so the current week has future cells
       history: {
         days: [day("2026-10-20", { hardSets: 9 }), day("2026-10-19", { hardSets: 0 })],
         mainLifts: [],
       },
     }));
-    const week = v.grid!.weeks[7];
+    const week = grid.weeks[7];
 
     expect(week.map((c) => c.state)).toEqual([
       "past", // Mon 19th — logged, but zero working sets
@@ -227,22 +230,22 @@ describe("the lift-day grid", () => {
   });
 
   it("counts lift days and does not print \"1 days\"", () => {
-    const one = volumeBlock(bootstrap({
+    const one = liftDayGrid(bootstrap({
       history: { days: [day("2026-10-21", { hardSets: 7 })], mainLifts: [] },
     }));
-    expect(one.grid!.days).toBe(1);
-    expect(one.grid!.rightLabel).toBe("1 day");
+    expect(one.days).toBe(1);
+    expect(one.rightLabel).toBe("1 day");
 
     // The fixture's default history is eight lift days inside the window.
-    const several = volumeBlock(bootstrap());
-    expect(several.grid!.days).toBe(8);
-    expect(several.grid!.rightLabel).toBe("8 days");
+    const several = liftDayGrid(bootstrap());
+    expect(several.days).toBe(8);
+    expect(several.rightLabel).toBe("8 days");
   });
 
   it("ignores lift days older than the eight-week window", () => {
-    const v = volumeBlock(bootstrap({
+    const grid = liftDayGrid(bootstrap({
       history: { days: [day("2026-08-24", { hardSets: 20 })], mainLifts: [] },
     }));
-    expect(v.grid!.days).toBe(0);
+    expect(grid.days).toBe(0);
   });
 });

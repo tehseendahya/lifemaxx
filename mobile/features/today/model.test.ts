@@ -252,7 +252,10 @@ describe("goals", () => {
     expect(block.targets).toEqual([]);
     expect(block.aims).toEqual([]);
     expect(block.context).toEqual([]);
-    expect(block.empty).toContain("bench 205 by December");
+    expect(block.empty).toBe(
+      "Write down what you're training for. A number and a month, like "
+      + "\"bench 205 by December\", gets tracked here.",
+    );
   });
 
   it("splits unmatched prose into aims and context, both verbatim", () => {
@@ -592,6 +595,16 @@ describe("strength", () => {
     }));
     expect(row.single).toBe(true);
     expect(row.deltaLabel).toBeNull();
+    // A figure and a sentence instead of a one-point chart.
+    expect(row.singleLine).toBe("First session 1 Oct. The trend starts with your next one.");
+  });
+
+  it("has no stand-in sentence once there is a line to draw", () => {
+    const [row] = strengthRows(bootstrap({
+      history: lifts([{ date: "2026-09-01", e1rmLb: 200 }, { date: "2026-10-01", e1rmLb: 210 }]),
+    }));
+    expect(row.singleLine).toBeNull();
+    expect(row.firstDate).toBe("2026-09-01");
   });
 
   it("is empty when nothing has two logged sessions", () => {
@@ -658,9 +671,8 @@ describe("consistency", () => {
     expect(block.stats[0]).toEqual({ label: "WEIGH-INS", value: "3 day streak", hint: undefined });
     expect(block.stats[1]).toEqual({ label: "INTAKE", value: "3/28 days", hint: "TDEE NEEDS 7" });
     expect(block.stats[2]).toEqual({ label: "LIFTS", value: "2 in 28d", hint: "0.5/wk" });
-    expect(block.note).toBe(
-      "Streak counts days you weighed in. Nothing else — not app opens, not hitting a target.",
-    );
+    // The always-on footnote is gone; the label already says WEIGH-INS.
+    expect(Object.keys(block)).toEqual(["stats"]);
   });
 
   it("says where a streak stops when the last weigh-in was not today", () => {

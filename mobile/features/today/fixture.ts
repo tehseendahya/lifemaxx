@@ -118,3 +118,57 @@ function cat(id: string, name: string) {
     muscles: [],
   };
 }
+
+/**
+ * A brand-new account, the way the server actually sends it on first launch.
+ *
+ * Every array empty, no target, calibrating, nothing eaten. `volume.ranked` is
+ * NOT empty, because it is not on a real day one either: `rankMuscles` returns
+ * every muscle with `daysSinceTrained: null` and a score of 1. A cold-start
+ * test with an empty ranking would pass for the wrong reason — the hero's owed
+ * chips are hidden on day one because rung 1 answered, not because nothing
+ * was ranked.
+ */
+export function emptyBootstrap(over: Partial<Bootstrap> = {}): Bootstrap {
+  return bootstrap({
+    goalsText: "",
+    target: { kcal: null, proteinG: 150, carbsG: null, fatG: null, mode: "calibrating" },
+    totals: { kcal: 0, proteinG: 0, carbsG: 0, fatG: 0 },
+    mealCount: 0,
+    volume: {
+      summary: "",
+      ranked: [
+        ranked({ muscle: "chest", label: "Chest", daysSinceTrained: null, score: 1 }),
+        ranked({ muscle: "lat", label: "Lats", daysSinceTrained: null, score: 1 }),
+      ],
+    },
+    tdee: { status: "insufficient_data", weighIns: 0, needed: 8 },
+    activeWorkout: null,
+    runs: [],
+    lowerBodyLiftDates: [],
+    lastSets: {},
+    history: { days: [], mainLifts: [] },
+    ...over,
+  });
+}
+
+/**
+ * Day three of the habit: three weigh-ins, two days of food, nothing lifted.
+ *
+ * The state the redesign's acceptance names — Body has enough for a partial
+ * card, maintenance is 3 of 8 weigh-ins and 2 of 7 food days.
+ */
+export function threeWeighIns(over: Partial<Bootstrap> = {}): Bootstrap {
+  return emptyBootstrap({
+    tdee: { status: "insufficient_data", weighIns: 3, needed: 8 },
+    history: {
+      days: [
+        day("2026-10-23", { weightLb: 183, kcal: 2400 }),
+        day("2026-10-24", { weightLb: 182, kcal: 2250 }),
+        day("2026-10-25", { weightLb: 182 }),
+      ],
+      mainLifts: [],
+    },
+    ...over,
+  });
+}

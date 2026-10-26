@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { bootstrap, day, liftHistory, ranked, run, TODAY } from "./fixture";
-import { verdict } from "./verdict";
+import { EMPTY_VERDICT, verdict } from "./verdict";
 import { agrees, refersTo } from "./model";
 
 /**
@@ -22,16 +22,18 @@ describe("rung 1 — nothing logged", () => {
   it("names what is missing and what appears once it is there", () => {
     const b = bootstrap({ history: { days: [], mainLifts: [] } });
     expect(verdict(b)).toEqual({
-      text: "No sessions logged in four weeks. Log one and this line names the muscle "
-        + "you owe the most sets to.",
+      text: "No sessions in the last four weeks. Start one. Every lift you log ranks your "
+        + "muscles by the sets they're owed, and this line picks today's for you.",
       tone: "ink",
+      kind: "empty",
     });
+    expect(verdict(b).text).toBe(EMPTY_VERDICT);
   });
 
   it("treats a day with only warmups as no session", () => {
     // `liftDaysIn` counts days with working sets; hardSets 0 is not a lift day.
     const b = bootstrap({ history: { days: [day("2026-10-24")], mainLifts: [] } });
-    expect(verdict(b).text).toContain("No sessions logged");
+    expect(verdict(b).text).toBe(EMPTY_VERDICT);
   });
 
   it("counts only days inside the 28-day window", () => {
@@ -39,7 +41,7 @@ describe("rung 1 — nothing logged", () => {
     const stale = ["2026-08-01", "2026-08-03", "2026-08-05", "2026-08-07",
       "2026-08-09", "2026-08-11", "2026-08-13"].map((d) => day(d, { hardSets: 18 }));
     const b = bootstrap({ history: { days: stale, mainLifts: [] } });
-    expect(verdict(b).text).toContain("No sessions logged");
+    expect(verdict(b).text).toBe(EMPTY_VERDICT);
   });
 
   it("outranks an active session and an interference hit", () => {
@@ -49,7 +51,7 @@ describe("rung 1 — nothing logged", () => {
       runs: [run({ sufferScore: 95 })],
       lowerBodyLiftDates: ["2026-10-24"],
     });
-    expect(verdict(b).text).toContain("No sessions logged");
+    expect(verdict(b).text).toBe(EMPTY_VERDICT);
   });
 
   /*
@@ -89,6 +91,7 @@ describe("rung 2 — interference", () => {
       text: "You ran hard yesterday. Legs on top of that is the trade — "
         + "do Rear Delts instead and squat Friday.",
       tone: "warn",
+      kind: "interference",
     });
   });
 
@@ -144,6 +147,7 @@ describe("rung 3 — mid-session", () => {
     expect(verdict(b)).toEqual({
       text: "You're mid-session. Rear Delts are still 10 sets short this week.",
       tone: "ink",
+      kind: "session",
     });
   });
 
@@ -162,6 +166,7 @@ describe("rung 4 — owed and recovered", () => {
       text: "Rear Delts are 10 sets short this week and you last hit them 9 days ago. "
         + "Train Rear Delts.",
       tone: "ink",
+      kind: "owed",
     });
   });
 
@@ -195,6 +200,7 @@ describe("rung 5 — owed but not recovered", () => {
       },
     });
     expect(verdict(b).text).toBe("Chest is short but you trained it yesterday. Do Lats instead.");
+    expect(verdict(b).kind).toBe("alternative");
   });
 
   it("says today when the collision is the same day", () => {
@@ -225,6 +231,8 @@ describe("rung 5 — owed but not recovered", () => {
     expect(verdict(b).text).toBe(
       "Everything that's behind, you trained in the last 48 hours. Take today off.",
     );
+    // The hero card reads this to swap START LIFT for a secondary button.
+    expect(verdict(b).kind).toBe("rest");
   });
 });
 
@@ -236,6 +244,7 @@ describe("rung 6 — nothing owed", () => {
     expect(verdict(b)).toEqual({
       text: "Nothing's behind this week. Hardest honest session you feel like, or take the day.",
       tone: "ink",
+      kind: "nothing_owed",
     });
   });
 
@@ -306,11 +315,18 @@ describe("voice", () => {
   });
 
   it("is at most two sentences, and the instruction is always one of them", () => {
-    for (const text of everyBranch()) {
+    // Rung 1 is the single exception and is asserted on its own below.
+    for (const text of everyBranch().filter((t) => t !== EMPTY_VERDICT)) {
       const sentences = text.split(/(?<=\.)\s+/).filter(Boolean);
       expect(sentences.length).toBeLessThanOrEqual(2);
       expect(text.endsWith(".")).toBe(true);
     }
+  });
+
+  it("lets only the empty rung run to three sentences: admission, instruction, why", () => {
+    const sentences = EMPTY_VERDICT.split(/(?<=\.)\s+/).filter(Boolean);
+    expect(sentences).toHaveLength(3);
+    expect(sentences[1]).toBe("Start one.");
   });
 });
 

@@ -24,16 +24,45 @@ import { agrees, liftDaysIn, plural, refersTo, shiftIso } from "./model";
  * Voice rules, enforced by `verdict.test.ts` over every branch: no "maybe",
  * "consider", "you might", "it could be worth"; no exclamation mark; no praise.
  * A second clause after an em dash is allowed. The first rung is the only one
- * written as two sentences, because the admission and the instruction have to
- * be separable.
+ * written as more than one sentence, because the admission, the instruction and
+ * what logging buys have to be separable — see `EMPTY_VERDICT`.
  */
 
 export type VerdictTone = "ink" | "warn";
 
+/**
+ * Which rung answered. Carried so the hero card can pick its button without
+ * matching on copy: the two rest-day rungs ("Take today off", "Nothing's
+ * behind") get a secondary LOG A LIFT ANYWAY rather than a primary START LIFT,
+ * and the mid-session rung gets RESUME SESSION.
+ */
+export type VerdictKind =
+  | "empty"
+  | "interference"
+  | "session"
+  | "owed"
+  | "alternative"
+  | "rest"
+  | "nothing_owed";
+
 export interface Verdict {
   text: string;
   tone: VerdictTone;
+  kind: VerdictKind;
 }
+
+/**
+ * Rung 1's copy, exported so the hero test can assert the exact sentence.
+ *
+ * Three sentences, the one place the ladder allows it: the admission, the
+ * instruction, and what logging buys. On day one that third sentence is the
+ * only explanation of what this line is for, and the user has no other way to
+ * learn that the app never assigns a day — it ranks muscles by what they are
+ * owed.
+ */
+export const EMPTY_VERDICT =
+  "No sessions in the last four weeks. Start one. Every lift you log ranks your "
+  + "muscles by the sets they're owed, and this line picks today's for you.";
 
 /**
  * Lift days below which the screen has nothing to rank, so it says so.
@@ -70,14 +99,14 @@ export const RECOVERED_DAYS = 2;
 
 const isLowerBody = (muscle: string): boolean => (LOWER_BODY as string[]).includes(muscle);
 
-const owed = (r: RankedMuscle): boolean => r.score > OWED_SCORE;
+export const owed = (r: RankedMuscle): boolean => r.score > OWED_SCORE;
 
 /** Never trained counts as recovered: there is nothing to recover from. */
 const recovered = (r: RankedMuscle): boolean =>
   r.daysSinceTrained === null || r.daysSinceTrained >= RECOVERED_DAYS;
 
 /** How many sets short of the bottom of the productive range a muscle is. */
-const setsShort = (r: RankedMuscle): number =>
+export const setsShort = (r: RankedMuscle): number =>
   Math.max(1, Math.round(WEEKLY_SET_TARGET.min - r.setsLast7d));
 
 export function verdict(b: Bootstrap): Verdict {
@@ -103,11 +132,7 @@ export function verdict(b: Bootstrap): Verdict {
    */
   const liftDays = liftDaysIn(b.history.days, b.today, LIFT_DAY_WINDOW);
   if (liftDays < MIN_LIFT_DAYS) {
-    return {
-      text: "No sessions logged in four weeks. Log one and this line names the muscle "
-        + "you owe the most sets to.",
-      tone: "ink",
-    };
+    return { text: EMPTY_VERDICT, tone: "ink", kind: "empty" };
   }
 
   // ---- 2. Interference. The one thing this app can say that a calorie app
@@ -125,6 +150,7 @@ export function verdict(b: Bootstrap): Verdict {
         : `You ran ${effort} ${when}. Legs on top of that is the trade — `
           + "take the lower body work easy today; nothing else is behind.",
       tone: "warn",
+      kind: "interference",
     };
   }
 
@@ -136,6 +162,7 @@ export function verdict(b: Bootstrap): Verdict {
           + "short this week."
         : "You're mid-session. Nothing's behind — finish on feel.",
       tone: "ink",
+      kind: "session",
     };
   }
 
@@ -149,6 +176,7 @@ export function verdict(b: Bootstrap): Verdict {
         text: `${top.label} ${agrees(top.label)} ${plural(setsShort(top), "set")} short this week and ${since}. `
           + `Train ${top.label}.`,
         tone: "ink",
+        kind: "owed",
       };
     }
 
@@ -160,12 +188,17 @@ export function verdict(b: Bootstrap): Verdict {
      */
     const alternative = ranked.find((r) => owed(r) && recovered(r));
     const trained = top.daysSinceTrained === 0 ? "today" : "yesterday";
-    return {
-      text: alternative
-        ? `${top.label} ${agrees(top.label)} short but you trained ${refersTo(top.label)} ${trained}. Do ${alternative.label} instead.`
-        : "Everything that's behind, you trained in the last 48 hours. Take today off.",
-      tone: "ink",
-    };
+    return alternative
+      ? {
+          text: `${top.label} ${agrees(top.label)} short but you trained ${refersTo(top.label)} ${trained}. Do ${alternative.label} instead.`,
+          tone: "ink",
+          kind: "alternative",
+        }
+      : {
+          text: "Everything that's behind, you trained in the last 48 hours. Take today off.",
+          tone: "ink",
+          kind: "rest",
+        };
   }
 
   // ---- 6. Nothing owed. Note what this does NOT say: it does not congratulate
@@ -173,6 +206,7 @@ export function verdict(b: Bootstrap): Verdict {
   return {
     text: "Nothing's behind this week. Hardest honest session you feel like, or take the day.",
     tone: "ink",
+    kind: "nothing_owed",
   };
 }
 
