@@ -14,6 +14,13 @@ import {
   tnum,
 } from "@/components/ui";
 import { microLabel } from "@/components/ui/Label";
+import {
+  WEIGHT_UNITS,
+  enteredWeightToLb,
+  equivalentLabel,
+  lbToEnteredWeight,
+  type WeightUnit,
+} from "@/components/ui/weight-entry";
 import { apiDelete } from "@/lib/api";
 import { tapError, tapSave, tapSelect } from "@/lib/haptics";
 import { enqueue, removeQueued } from "@/lib/outbox";
@@ -163,6 +170,19 @@ export function SessionScreen({
   const [localSets, setLocalSets] = useState<LocalSet[]>([]);
   const [pad, setPad] = useState<PadField>(null);
   const [padValue, setPadValue] = useState("");
+  /*
+   * Which unit the weight pad is typing in, per exercise, for this session.
+   *
+   * Per exercise because that is how a gym is laid out: the owner's own paste
+   * had bench in pounds and the pec deck in kilos, because that is what the
+   * machines are labelled in. One global unit would be wrong on half the
+   * session.
+   *
+   * Session-scoped rather than stored: it resets to `lb` on relaunch. If
+   * re-tapping it each session becomes a nuisance, it wants persisting per
+   * exercise — but that is a preference to store, not a guess to make now.
+   */
+  const [padUnits, setPadUnits] = useState<Record<string, WeightUnit>>({});
   const [rpeOpen, setRpeOpen] = useState<Record<string, boolean>>({});
   const [noteOpen, setNoteOpen] = useState<Record<string, boolean>>({});
   const [picking, setPicking] = useState(false);
@@ -295,7 +315,11 @@ export function SessionScreen({
       // SET WEIGHT, so this is the action it advertised.
       if (!canLog(entry)) {
         tapSelect();
-        setPadValue(numberToPad(entry.weightLb));
+        // Prefilled in whatever unit this exercise is being typed in, so the
+        // figure on screen is the one the pad will read back.
+        setPadValue(numberToPad(
+          lbToEnteredWeight(entry.weightLb ?? 0, padUnits[exerciseId] ?? "lb"),
+        ));
         setPad({ field: "weight", exerciseId });
         return;
       }
@@ -371,10 +395,13 @@ export function SessionScreen({
     // value alone rather than writing 0 — that distinction is the whole reason
     // `NumberPad` emits a raw string and refuses to parse it itself.
     if (value !== null) {
+      const unit = padUnits[pad.exerciseId] ?? "lb";
       patchDraft(
         pad.exerciseId,
         pad.field === "weight"
-          ? { weightLb: value }
+          // Full precision on purpose: storage is kg, so a kg entry only
+          // round-trips exactly if nothing rounds here. See weight-entry.ts.
+          ? { weightLb: enteredWeightToLb(value, unit) }
           // Clamped here rather than rejected: a typed `0` reps would make the
           // hero button fall back to SET WEIGHT, so tapping LOG would open the
           // weight pad for a reps mistake.
@@ -384,7 +411,7 @@ export function SessionScreen({
 
     setPad(null);
     setPadValue("");
-  }, [pad, padValue, patchDraft]);
+  }, [pad, padValue, patchDraft, padUnits]);
 
   // ----------------------------------------------------------------- render
 
@@ -535,7 +562,14 @@ export function SessionScreen({
                     tapSelect();
                     const entry = entryFor(exercise.id);
                     setPadValue(
-                      numberToPad(field === "weight" ? entry.weightLb : entry.reps),
+                      numberToPad(
+                        field === "weight"
+                          ? lbToEnteredWeight(
+                              entry.weightLb ?? 0,
+                              padUnits[exercise.id] ?? "lb",
+                            )
+                          : entry.reps,
+                      ),
                     );
                     setPad({ field, exerciseId: exercise.id });
                   }}
@@ -624,8 +658,33 @@ export function SessionScreen({
         visible={pad !== null}
         value={padValue}
         label={pad?.field === "reps" ? "Reps" : "Weight"}
-        unit={pad?.field === "reps" ? "reps" : "lb"}
+        unit={pad?.field === "reps" ? "reps" : (padUnits[pad?.exerciseId ?? ""] ?? "lb")}
         allowDecimal={pad?.field !== "reps"}
+        units={
+          pad?.field === "weight"
+            ? {
+                options: WEIGHT_UNITS,
+                value: padUnits[pad.exerciseId] ?? "lb",
+                onChange: (next) => {
+                  tapSelect();
+                  // Relabel, never rescale: the digits already typed now mean
+                  // the newly chosen unit. weight-entry.ts explains why.
+                  setPadUnits((current) => ({
+                    ...current,
+                    [pad.exerciseId]: next as WeightUnit,
+                  }));
+                },
+              }
+            : undefined
+        }
+        equivalent={
+          pad?.field === "weight"
+            ? equivalentLabel(
+                padToNumber(padValue),
+                padUnits[pad.exerciseId] ?? "lb",
+              )
+            : null
+        }
         onChange={(next) => {
           tapSelect();
           setPadValue(next);

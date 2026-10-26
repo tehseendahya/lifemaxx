@@ -29,6 +29,22 @@ const styles = StyleSheet.create({
   value: { ...tnum, color: color.ink, fontSize: 34, fontWeight: "600" },
   /** An untouched field shows a muted zero, so "0" typed is not "0" assumed. */
   valueEmpty: { color: color.muted },
+  /** The lb/kg toggle, sitting on the figure's baseline. */
+  units: { flexDirection: "row", marginLeft: "auto", gap: 2 },
+  unitKey: {
+    minWidth: 44,          // iOS touch target; this is tapped mid-set.
+    paddingVertical: 6,
+    borderRadius: radius.sm,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  unitKeyOn: { backgroundColor: color.accentSoft },
+  unitKeyText: { ...tnum, color: color.muted, fontSize: 14, fontWeight: "600" },
+  unitKeyTextOn: { color: color.accentInk },
+
+  /** "44 lb" under a kg figure. Muted: it is a reading, not the entry. */
+  equivalent: { ...tnum, color: color.muted, fontSize: 14, marginTop: 2 },
+
   unit: { color: color.muted, fontSize: 16 },
 
   grid: { borderTopWidth: 1, borderColor: color.line },
@@ -80,6 +96,8 @@ export function NumberPad({
   label,
   unit,
   allowDecimal = false,
+  units,
+  equivalent,
   onChange,
   onDone,
   onCancel,
@@ -93,6 +111,20 @@ export function NumberPad({
   unit?: string;
   /** Weight and bodyweight: true. Reps: false. */
   allowDecimal?: boolean;
+  /**
+   * Offer a unit choice beside the figure. Omit it for anything with one unit
+   * — reps, macros — which then renders exactly as before.
+   */
+  units?: {
+    options: readonly string[];
+    value: string;
+    onChange: (next: string) => void;
+  };
+  /**
+   * The muted line under the figure: what was typed, in the other unit. The
+   * caller computes it, because only the caller knows what the figure means.
+   */
+  equivalent?: string | null;
   onChange: (next: string) => void;
   onDone: () => void;
   onCancel: () => void;
@@ -127,7 +159,48 @@ export function NumberPad({
                 {displayValue(value)}
               </Text>
               {unit ? <Text style={styles.unit}>{unit}</Text> : null}
+
+              {/*
+                * The unit toggle, only when the caller offers a choice. Reps
+                * and macros have one unit and get no control.
+                *
+                * It RELABELS rather than converts: tapping `kg` with "20"
+                * typed means twenty kilograms, not forty-four. See the note in
+                * `weight-entry.ts` — reaching for this control is usually the
+                * moment you notice the unit is wrong, so reinterpreting is
+                * what you meant.
+                */}
+              {units ? (
+                <View style={styles.units}>
+                  {units.options.map((option) => {
+                    const active = option === units.value;
+                    return (
+                      <Pressable
+                        key={option}
+                        // Haptics are the caller's job here, as they are for
+                        // every other key on this pad.
+                        onPress={() => { if (!active) units.onChange(option); }}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: active }}
+                        accessibilityLabel={`Enter in ${option === "kg" ? "kilograms" : "pounds"}`}
+                        style={[styles.unitKey, active && styles.unitKeyOn]}
+                      >
+                        <Text style={[styles.unitKeyText, active && styles.unitKeyTextOn]}>
+                          {option}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              ) : null}
             </View>
+
+            {/*
+              * What you typed, in the other unit. Always visible once there is
+              * a figure, so the toggle never has to do two jobs — and so the
+              * owner can see "44 lb" while typing against a 20 kg stack.
+              */}
+            {equivalent ? <Text style={styles.equivalent}>{equivalent}</Text> : null}
           </View>
 
           <View style={styles.grid}>
