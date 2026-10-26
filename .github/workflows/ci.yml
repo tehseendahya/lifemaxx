@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A newer push to the same PR/branch cancels the run it supersedes.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CI: "1"
+  NEXT_TELEMETRY_DISABLED: "1"
+  EXPO_NO_TELEMETRY: "1"
+
+jobs:
+  root:
+    name: Backend (tsc + vitest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+      # DATABASE_URL is blank on purpose: *.db.test.ts need a real Postgres, and
+      # nothing in CI may ever reach the production database.
+      - run: npx vitest run --exclude '**/*.db.test.ts' --exclude '.claude/**'
+        env:
+          DATABASE_URL: ""
+
+  mobile:
+    name: Client (tsc + vitest + iOS/web export)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            mobile/package-lock.json
+      # The root install is required: mobile's tsc follows the `@/db/schema`
+      # path into ../src/db/schema.ts, which resolves drizzle-orm from the ROOT
+      # node_modules (mobile/README.md, "Sharing code").
+      - run: npm ci
+      - run: npm ci
+        working-directory: mobile
+      - run: npx tsc --noEmit
+        working-directory: mobile
+      - run: npx vitest run
+        working-directory: mobile
+      # The Expo Go gate: Metro must resolve every route, shared import and
+      # native-module import. Needs no secrets (EXPO_PUBLIC_* may be empty).
+      - name: Export iOS bundle
+        run: npx expo export --platform ios --output-dir "$RUNNER_TEMP/export-ios"
+        working-directory: mobile
+      - name: Export web bundle
+        run: npx expo export --platform web --output-dir "$RUNNER_TEMP/export-web"
+        working-directory: mobile
+
+  web-build:
+    name: Production build (npm run build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            mobile/package-lock.json
+      - run: npm ci
+      # `next build` loads modules that throw when DATABASE_URL is unset. This
+      # dummy points at a closed local port, so nothing can connect. VERCEL_ENV
+      # is unset, so the build never runs migrations.
+      - run: npm run build
+        env:
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:1/ci
