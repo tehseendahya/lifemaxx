@@ -1,15 +1,13 @@
 import { useEffect, useState } from "react";
 import { AppState, type AppStateStatus } from "react-native";
-import * as SQLite from "expo-sqlite";
 import * as Network from "expo-network";
 
 import {
   flush, memoryStore, classifyStatus, newClientId,
   type FlushResult, type OutboxItem, type OutboxKind, type OutboxStore, type Send,
 } from "./shared/outbox";
-import {
-  CREATE_TABLE, createSqliteStore, dropStaleStarts,
-} from "./outbox-store";
+import { dropStaleStarts } from "./outbox-store";
+import { openOutboxStore } from "./outbox-db";
 import { apiBaseUrl } from "./config";
 import { accessToken } from "./auth";
 
@@ -39,7 +37,9 @@ export {
  *
  * SQLite rather than AsyncStorage because the queue needs durable, ordered
  * rows, and rather than react-native-mmkv because MMKV requires a prebuild and
- * this app has to run in Expo Go.
+ * this app has to run in Expo Go. In a browser it is `localStorage` instead —
+ * `openOutboxStore` comes from `outbox-db.ts` on the phone and
+ * `outbox-db.web.ts` on the web, and the reason is on `createKeyValueStore`.
  *
  * The memory fallback means a failure to open degrades to "the queue lives as
  * long as the app does" rather than a save button that throws — which, mid-set,
@@ -52,11 +52,9 @@ function getStore(): Promise<OutboxStore> {
 
   storePromise = (async () => {
     try {
-      const db = await SQLite.openDatabaseAsync("lifemaxx.db");
-      await db.execAsync(CREATE_TABLE);
-      return createSqliteStore(db);
+      return await openOutboxStore();
     } catch (err) {
-      console.warn("[outbox] SQLite unavailable — queueing in memory for this launch only.", err);
+      console.warn("[outbox] storage unavailable — queueing in memory for this launch only.", err);
       return memoryStore();
     }
   })();

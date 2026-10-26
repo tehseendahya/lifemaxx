@@ -3,9 +3,10 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 
 import {
-  BarSeries, Button, Card, Chart, Empty, Label, Pill, RangeBar, Screen, Sparkline, Spinner,
+  BarSeries, Button, Card, Chart, Columns, Empty, Label, Pill, RangeBar, Screen, Sparkline, Spinner,
   Stat, color, hit, microLabel, space, tnum,
 } from "@/components/ui";
+import { useIsWide } from "@/lib/layout";
 import { tapSelect } from "@/lib/haptics";
 /*
  * Read-only, and the plan's one cross-feature import on this screen: the Lift
@@ -74,6 +75,8 @@ const styles = StyleSheet.create({
   muted: { color: color.muted, fontSize: 13, lineHeight: 19 },
 
   section: { marginTop: space.lg, marginBottom: space.sm },
+  // Heads the right-hand column on a laptop, level with the top of the hero.
+  sectionWide: { marginTop: 0 },
 
   statRow: {
     flexDirection: "row",
@@ -205,6 +208,7 @@ const styles = StyleSheet.create({
  */
 export default function TodayScreen() {
   const router = useRouter();
+  const wide = useIsWide();
   const { data, loading, error, refreshing, onRefresh, retry } = useBootstrap();
 
   const [pad, setPad] = useState(false);
@@ -296,18 +300,27 @@ export default function TodayScreen() {
       refreshing={refreshing}
       onRefresh={onRefresh}
     >
-      <HeroCard
-        call={call}
-        chips={owedChips(data)}
-        action={heroAction(data, call)}
-        checks={checks}
-        error={weighError}
-        onAction={goLift}
-        onCheck={onCheck}
-        onCoach={goCoach}
+      {/*
+        On a laptop: the call and today's checks on the left, everything under
+        Progress on the right. On the phone, the same cards in the same order.
+      */}
+      <Columns
+        left={
+          <HeroCard
+            call={call}
+            chips={owedChips(data)}
+            action={heroAction(data, call)}
+            checks={checks}
+            error={weighError}
+            onAction={goLift}
+            onCheck={onCheck}
+            onCoach={goCoach}
       />
 
-      <Label style={styles.section}>Progress</Label>
+        }
+        right={
+      <>
+      <Label style={[styles.section, wide && styles.sectionWide]}>Progress</Label>
 
       {unlock !== null && (
         <UnlockCard card={unlock} calibration={calibration} onAction={onUnlock} />
@@ -394,6 +407,9 @@ export default function TodayScreen() {
           <NavLine onPress={goRuns}>See the running week →</NavLine>
         </Card>
       )}
+      </>
+        }
+      />
 
       <WeighInPad
         visible={pad}

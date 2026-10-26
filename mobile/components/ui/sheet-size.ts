@@ -47,3 +47,15 @@ export function sheetMaxHeight(windowHeight: number, insetTop: number): number {
   const reserved = Math.max(0, insetTop) + SHEET_TOP_GAP;
   return Math.max(SHEET_MIN_HEIGHT, windowHeight - reserved);
 }
+
+/**
+ * The same cap for the laptop's centred dialog (`Sheet` and `NumberPad` on a
+ * wide web window), which needs a margin above AND below: a dialog that touched
+ * the bottom edge would look like a sheet that had lost its way.
+ */
+export const DIALOG_MARGIN = 48;
+
+export function dialogMaxHeight(windowHeight: number): number {
+  if (!Number.isFinite(windowHeight) || windowHeight <= 0) return UNBOUNDED;
+  return Math.max(SHEET_MIN_HEIGHT, windowHeight - 2 * DIALOG_MARGIN);
+}

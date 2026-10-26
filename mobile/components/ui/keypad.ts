@@ -117,3 +117,18 @@ export function applyFirstKey(value: string, key: PadKey, allowDecimal: boolean)
 export function displayValue(value: string): string {
   return value === "" ? "0" : value;
 }
+
+/**
+ * What a typed field holds, for the laptop's keyboard entry.
+ *
+ * On a wide web window the pad's readout is a real text field, and whatever
+ * the browser hands back — a paste, a stray letter, "185 lb" — has to end up as
+ * the same kind of string a run of key presses would have produced. So it IS a
+ * run of key presses: every character goes through `applyKey` from empty,
+ * which drops anything that is not a digit or (when allowed) the first point,
+ * collapses leading zeros and enforces `MAX_LENGTH`. One set of rules for the
+ * pad and the keyboard, and `NumberPad`'s callers cannot tell them apart.
+ */
+export function typedValue(text: string, allowDecimal: boolean): string {
+  return [...text].reduce((value, ch) => applyKey(value, ch, allowDecimal), "");
+}

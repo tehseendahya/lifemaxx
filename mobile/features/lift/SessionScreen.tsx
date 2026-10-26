@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useKeepAwake } from "expo-keep-awake";
 import { useRouter } from "expo-router";
 import { useQueryClient } from "@tanstack/react-query";
@@ -7,6 +7,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   Button,
   NumberPad,
+  Overlay,
   Screen,
   Sheet,
   color,
@@ -162,7 +163,12 @@ export function SessionScreen({
   // While a session is live the screen is read between sets, with wet hands,
   // and a phone that locks every thirty seconds is a phone that costs a Face ID
   // per set.
-  useKeepAwake();
+  //
+  // The deactivate is told to stay quiet because the activate can fail: a
+  // browser without the Wake Lock API (or one that refuses it, as a laptop on
+  // battery may) leaves nothing to release, and an unhandled rejection on
+  // unmount is all the default would add. On the phone it always succeeds.
+  useKeepAwake(undefined, { suppressDeactivateWarnings: true });
 
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -679,6 +685,17 @@ export function SessionScreen({
                       weightLb: entry.weightLb ?? undefined,
                     });
                   }}
+                  // The laptop's typed fields. Like a step, a typed figure
+                  // commits the other one as shown, so a suggestion landing
+                  // mid-typing cannot change it underneath.
+                  onTypeWeight={(weightLb) => {
+                    const entry = entryFor(exercise.id);
+                    patchDraft(exercise.id, { weightLb, reps: entry.reps ?? undefined });
+                  }}
+                  onTypeReps={(reps) => {
+                    const entry = entryFor(exercise.id);
+                    patchDraft(exercise.id, { reps, weightLb: entry.weightLb ?? undefined });
+                  }}
                   rpeOpen={rpeOpen[exercise.id] === true}
                   onToggleRpe={() => {
                     tapSelect();
@@ -784,9 +801,8 @@ export function SessionScreen({
         }}
       />
 
-      <Modal
+      <Overlay
         visible={picking}
-        animationType="slide"
         onRequestClose={() => setPicking(false)}
         statusBarTranslucent
       >
@@ -803,7 +819,7 @@ export function SessionScreen({
             setPage(addPageIndex);
           }}
         />
-      </Modal>
+      </Overlay>
 
       {/*
         Tapping a chip under the card opens this. It replaced a sheet that could

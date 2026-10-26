@@ -308,6 +308,28 @@ export function isScratchUri(uri: string, cacheRoot: string): boolean {
   return uri.startsWith(root) && !uri.slice(root.length).split("/").includes("..");
 }
 
+/**
+ * How to get rid of one scratch copy of a meal photo, by where it lives.
+ *
+ * `file` — a temp file on the phone: delete it (expo-file-system, native only).
+ * `blob` — an object URL in a browser: revoke it. The web picker and the web
+ *   resizer both mint one (`URL.createObjectURL`), and an unrevoked object URL
+ *   keeps the whole photo alive in the tab's memory until the page is closed —
+ *   which on a laptop that stays open for days is as close to "persisted" as a
+ *   browser gets. Revoking is the browser's version of the delete.
+ * `none` — anything else (a `data:` URL, a `ph://` asset id): nothing on disk
+ *   or in the URL table to release.
+ *
+ * The platform is decided by the URI rather than by `Platform.OS`, so a file
+ * URI can never be handed to `URL.revokeObjectURL` or a blob URL to
+ * expo-file-system, whichever target this is running on.
+ */
+export function scratchDisposal(uri: string): "file" | "blob" | "none" {
+  if (uri.startsWith("file://")) return "file";
+  if (uri.startsWith("blob:")) return "blob";
+  return "none";
+}
+
 // ----------------------------------------------------------------- arithmetic
 
 /**

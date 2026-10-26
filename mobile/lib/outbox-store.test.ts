@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
-  createSqliteStore, dropStaleStarts, rowToItem, CREATE_TABLE,
-  MAX_SESSION_START_AGE_MS, type BindValue, type OutboxRow, type SqliteLike,
+  createKeyValueStore, createSqliteStore, dropStaleStarts, rowToItem, CREATE_TABLE,
+  MAX_SESSION_START_AGE_MS, WEB_OUTBOX_KEY,
+  type BindValue, type KeyValueLike, type OutboxRow, type SqliteLike,
 } from "./outbox-store";
 import {
   flush, memoryStore, MAX_ATTEMPTS, backoffMs,
@@ -324,6 +325,100 @@ describe("the adapter under the real shared flush()", () => {
     await flush(store, async (i) => { seen.push(i.url); return { status: "ok" }; });
 
     expect(seen).toEqual(["/api/session/start", "/api/sets", "/api/sets"]);
+  });
+});
+
+/** `localStorage`, as far as the browser store uses it. */
+function fakeKv(initial: Record<string, string> = {}) {
+  const data = new Map(Object.entries(initial));
+  return {
+    data,
+    kv: {
+      getItem: (k: string) => data.get(k) ?? null,
+      setItem: (k: string, v: string) => { data.set(k, v); },
+    } satisfies KeyValueLike,
+  };
+}
+
+describe("createKeyValueStore (the browser's outbox)", () => {
+  it("round-trips an item, payload included", async () => {
+    const { kv } = fakeKv();
+    const store = createKeyValueStore(kv);
+    const original = item({ payload: { exerciseId: "abc", reps: 6, weightLb: 45, note: "ok" } });
+
+    await store.put(original);
+
+    expect(await store.all()).toEqual([original]);
+  });
+
+  it("survives a reload: a second store over the same storage sees the rows", async () => {
+    const { kv } = fakeKv();
+    await createKeyValueStore(kv).put(item({ id: "a" }));
+
+    expect((await createKeyValueStore(kv).all()).map((i) => i.id)).toEqual(["a"]);
+  });
+
+  it("returns rows oldest first", async () => {
+    const { kv } = fakeKv();
+    const store = createKeyValueStore(kv);
+    await store.put(item({ id: "late", createdAt: 3 }));
+    await store.put(item({ id: "early", createdAt: 1 }));
+
+    expect((await store.all()).map((i) => i.id)).toEqual(["early", "late"]);
+  });
+
+  it("records a retry without rewriting what was logged", async () => {
+    const { kv } = fakeKv();
+    const store = createKeyValueStore(kv);
+    await store.put(item({ id: "a", createdAt: 1, payload: { reps: 6 } }));
+
+    await store.put(item({
+      id: "a", createdAt: 999, payload: { reps: 99 }, attempts: 2, nextAttemptAt: 50, lastError: "503",
+    }));
+
+    const [read] = await store.all();
+    expect(read.payload).toEqual({ reps: 6 });
+    expect(read.createdAt).toBe(1);
+    expect(read.attempts).toBe(2);
+    expect(read.nextAttemptAt).toBe(50);
+    expect(read.lastError).toBe("503");
+  });
+
+  it("removes by id", async () => {
+    const { kv } = fakeKv();
+    const store = createKeyValueStore(kv);
+    await store.put(item({ id: "a", createdAt: 1 }));
+    await store.put(item({ id: "b", createdAt: 2 }));
+
+    await store.remove("a");
+
+    expect((await store.all()).map((i) => i.id)).toEqual(["b"]);
+  });
+
+  it("reads a mangled or foreign value as an empty queue instead of throwing", async () => {
+    for (const junk of ["{not json", '{"a":1}', "null", "42"]) {
+      const { kv } = fakeKv({ [WEB_OUTBOX_KEY]: junk });
+      expect(await createKeyValueStore(kv).all()).toEqual([]);
+    }
+  });
+
+  it("is driven correctly by the real shared flush(): in order, stopping at a failure", async () => {
+    const { kv } = fakeKv();
+    const store = createKeyValueStore(kv);
+    await store.put(item({ id: "a", createdAt: 1 }));
+    await store.put(item({ id: "b", createdAt: 2 }));
+    await store.put(item({ id: "c", createdAt: 3 }));
+
+    const seen: string[] = [];
+    const send: Send = async (i) => {
+      seen.push(i.id);
+      return i.id === "b" ? { status: "retry", error: "offline" } : { status: "ok" };
+    };
+    const result = await flush(store, send, 0);
+
+    expect(seen).toEqual(["a", "b"]);
+    expect(result.sent).toBe(1);
+    expect((await store.all()).map((i) => i.id)).toEqual(["b", "c"]);
   });
 });
 

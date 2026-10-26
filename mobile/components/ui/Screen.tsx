@@ -2,6 +2,8 @@ import { RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { ReactNode } from "react";
 
+import { CONTENT_MAX_WIDTH, useIsWide } from "@/lib/layout";
+
 import { SCROLL_BOTTOM_INSET, color, space } from "./tokens";
 
 const styles = StyleSheet.create({
@@ -45,7 +47,25 @@ const styles = StyleSheet.create({
    * needs a native module, and an opaque strip cannot fail to load.
    */
   statusCover: { position: "absolute", left: 0, right: 0, top: 0, backgroundColor: color.ground },
+
+  /**
+   * The laptop column: centred, capped, and with more air than a phone's
+   * 16pt gutter. `width: "100%"` is what lets `maxWidth` bite inside a scroll
+   * container, whose content otherwise sizes to its children.
+   */
+  wide: {
+    width: "100%",
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: "center",
+    paddingHorizontal: space.xxl + space.sm,
+  },
 });
+
+/**
+ * The top padding on a laptop, where there is no status bar to clear and the
+ * title should not sit flush against the top of the window.
+ */
+const WIDE_TOP = 40;
 
 /**
  * Every screen's frame: safe-area padding, the title block, and the scroll
@@ -56,8 +76,10 @@ const styles = StyleSheet.create({
  * without fighting it — so the top inset is this component's job and no screen
  * should add its own.
  *
- * There is no `wide` prop. The web's two-column variant was a laptop
- * affordance; a phone is one column.
+ * There is no `wide` prop: the laptop layout is decided by the window, not by
+ * the screen. On a wide browser window the content becomes a centred column
+ * capped at `CONTENT_MAX_WIDTH`, and the screens that have independent cards
+ * lay them out in two with `Columns`. A phone is one column, as before.
  */
 export function Screen({
   title,
@@ -85,6 +107,8 @@ export function Screen({
   onRefresh?: () => void;
 }) {
   const insets = useSafeAreaInsets();
+  const wide = useIsWide();
+  const top = wide ? WIDE_TOP : insets.top + space.md;
 
   const header = (
     <View style={styles.header}>
@@ -100,7 +124,7 @@ export function Screen({
 
   if (!scroll) {
     return (
-      <View style={[styles.root, styles.gutter, { paddingTop: insets.top + space.md }]}>
+      <View style={[styles.root, styles.gutter, wide && styles.wide, { paddingTop: top }]}>
         {header}
         {/*
           No bottom inset on the fixed variant. This is for screens that pin
@@ -118,8 +142,9 @@ export function Screen({
         style={styles.root}
         contentContainerStyle={[
           styles.gutter,
+          wide && styles.wide,
           {
-            paddingTop: insets.top + space.md,
+            paddingTop: top,
             paddingBottom: SCROLL_BOTTOM_INSET + insets.bottom,
           },
         ]}

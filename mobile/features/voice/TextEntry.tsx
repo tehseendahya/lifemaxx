@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { ComponentRef } from "react";
-import { Modal, StyleSheet, Text, TextInput, View } from "react-native";
+import { StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { Button, Label, color, hit, radius, space } from "@/components/ui";
+import { Button, Overlay, Label, color, hit, radius, space } from "@/components/ui";
 import { microLabel } from "@/components/ui/Label";
 import { tapSelect } from "@/lib/haptics";
 
@@ -110,7 +110,7 @@ export function TextEntry({
   const trimmed = text.trim();
 
   return (
-    <Modal visible transparent={false} animationType="slide" onRequestClose={onCancel}>
+    <Overlay visible onRequestClose={onCancel}>
       <View style={[styles.root, { paddingTop: insets.top + space.md }]}>
         <View style={styles.head}>
           <Text style={styles.title}>Type it</Text>
@@ -164,6 +164,6 @@ export function TextEntry({
           so they need a connection. Nothing is logged until you confirm it.
         </Text>
       </View>
-    </Modal>
+    </Overlay>
   );
 }

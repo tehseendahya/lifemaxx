@@ -120,7 +120,7 @@ export default function RunsScreen() {
     return (
       <Screen title="Running" refreshing={refreshing} onRefresh={onRefresh}>
         <Empty>
-          No runs yet. Connect Strava in Settings and they arrive on the nightly pull.
+          No runs yet. Connect Strava under You → Connections and they arrive on the nightly pull.
         </Empty>
       </Screen>
     );

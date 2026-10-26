@@ -8,11 +8,15 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import { Button, Card, Label, Spinner, color, font, radius, space } from "@/components/ui";
 import {
-  ensureProfileForCurrentUser, isSupabaseConfigured, signIn, signUp, useSession,
+  ensureProfileForCurrentUser, isSupabaseConfigured, requestPasswordReset, signIn, signUp,
+  useSession,
 } from "@/lib/auth";
+import { apiBaseUrl } from "@/lib/config";
 import { tapError, tapSave, tapSelect } from "@/lib/haptics";
+import { useIsWide } from "@/lib/layout";
 
 import { ConnectionCard, useReachability } from "./ConnectionCard";
+import { passwordResetRedirect } from "./model";
 
 /**
  * Email and password.
@@ -27,10 +31,14 @@ import { ConnectionCard, useReachability } from "./ConnectionCard";
  * answer; the other is the coach's message field. Everything numeric in this
  * app uses `NumberPad` instead.
  *
- * There is no password reset here. Resetting a password is a web page with a
- * redirect back to a hosted callback, which is the magic-link problem wearing a
- * different hat — so it says to use the browser app instead, which is honest
- * and costs the user one sentence rather than a dead end.
+ * "Forgot password?" emails a reset link. The link opens in a browser on the
+ * server's own `/auth/callback` and `/reset-password` pages — the new password
+ * is set there, not in this app, which keeps the deep-link problem out of it —
+ * and then the user signs in here as normal. The old web login page was the
+ * only other place to ask for one, and it is gone.
+ *
+ * On a laptop the form is a centred column rather than stretching across the
+ * window; the phone layout is unchanged.
  */
 
 const styles = StyleSheet.create({
@@ -71,15 +79,19 @@ const styles = StyleSheet.create({
   switcherText: { color: color.accent, fontSize: 14 },
 
   blockerText: { color: color.bad, fontSize: 13, lineHeight: 19 },
-  reset: { color: color.muted, fontSize: 12, lineHeight: 18, marginTop: space.lg },
+  forgot: { paddingVertical: space.sm, alignSelf: "flex-start" },
 
   busy: { alignItems: "center", justifyContent: "center", height: 56 },
+
+  /** The laptop: a narrow centred form, a little way down the window. */
+  wide: { width: "100%", maxWidth: 420, alignSelf: "center" },
 });
 
 type Mode = "in" | "up";
 
 export default function SignInScreen() {
   const insets = useSafeAreaInsets();
+  const wide = useIsWide();
   const client = useQueryClient();
   const probe = useReachability();
   const { session } = useSession();
@@ -145,6 +157,42 @@ export default function SignInScreen() {
     }
   }, [ready, mode, email, password, client]);
 
+  /*
+   * The link has to land on the server: the page's own origin in a browser
+   * (the app and the API are one site there), the API base URL on the phone.
+   */
+  const forgot = useCallback(async () => {
+    if (busy) return;
+    if (email.trim() === "") {
+      setNotice(null);
+      setError("Type your email above first, then tap Forgot password.");
+      return;
+    }
+    const origin = Platform.OS === "web" && typeof window !== "undefined"
+      ? window.location.origin
+      : apiBaseUrl();
+    const redirectTo = passwordResetRedirect(origin);
+    if (redirectTo === null) {
+      setNotice(null);
+      setError("No server is set, so there is nowhere for the reset link to go. Set one below.");
+      return;
+    }
+
+    tapSelect();
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await requestPasswordReset(email, redirectTo);
+      setNotice("Check your email for a link to set a new password, then sign in here.");
+    } catch (err) {
+      tapError();
+      setError(err instanceof Error ? err.message : "Could not send the reset email.");
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, email]);
+
   const switchMode = useCallback(() => {
     tapSelect();
     setMode((m) => (m === "in" ? "up" : "in"));
@@ -158,11 +206,14 @@ export default function SignInScreen() {
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
       <ScrollView
-        contentContainerStyle={{
-          paddingHorizontal: space.lg,
-          paddingTop: insets.top + 48,
-          paddingBottom: insets.bottom + space.xxl,
-        }}
+        contentContainerStyle={[
+          {
+            paddingHorizontal: space.lg,
+            paddingTop: wide ? 96 : insets.top + 48,
+            paddingBottom: insets.bottom + space.xxl,
+          },
+          wide && styles.wide,
+        ]}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
       >
@@ -234,10 +285,14 @@ export default function SignInScreen() {
         </Pressable>
 
         {mode === "in" && (
-          <Text style={styles.reset}>
-            Forgotten your password? Reset it in the browser app — it needs an
-            emailed link, which only works on the web.
-          </Text>
+          <Pressable
+            onPress={() => { void forgot(); }}
+            disabled={busy || !isSupabaseConfigured()}
+            style={styles.forgot}
+            accessibilityRole="link"
+          >
+            <Text style={styles.switcherText}>Forgot password?</Text>
+          </Pressable>
         )}
 
         {/*

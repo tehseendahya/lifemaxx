@@ -48,8 +48,10 @@ capability really differs:
 **Wide layout:** web with `useWindowDimensions().width >= 900`. A left sidebar
 (Today, Lift, Food, Runs, Coach, You) replaces the tab bar, and content sits
 in a centered column of about 1100px max, with two-column grids where cards
-are independent. Narrow web looks like the phone app. Use the shared
-responsive helper rather than hard-coding 900 in each screen.
+are independent. Narrow web looks like the phone app. Use `useIsWide()` from
+`lib/layout.ts` (and `components/ui/Columns.tsx`, `Overlay`) rather than
+hard-coding 900 in each screen. The web outbox is `lib/outbox-db.web.ts`
+(localStorage); the phone uses expo-sqlite.
 
 ## Rules
 

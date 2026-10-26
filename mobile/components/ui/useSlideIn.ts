@@ -44,8 +44,12 @@ function useReducedMotion(): boolean {
  *
  * `mounted` lags `visible` on the way out so the exit animation can finish
  * before the `Modal` unmounts. Callers render nothing while it is false.
+ *
+ * `centred` is the laptop's dialog: a panel in the middle of the window that
+ * rose by its own height would start below the fold, so it fades in with a
+ * short lift instead. Same timings, same reduced-motion rule.
  */
-export function useSlideIn(visible: boolean) {
+export function useSlideIn(visible: boolean, centred = false) {
   const [mounted, setMounted] = useState(visible);
   const reduced = useReducedMotion();
   const progress = useRef(new Animated.Value(visible ? 1 : 0)).current;
@@ -96,10 +100,17 @@ export function useSlideIn(visible: boolean) {
     backdropStyle: {
       opacity: progress.interpolate({ inputRange: [0, 1], outputRange: [0, 0.6] }),
     },
-    panelStyle: {
-      transform: [
-        { translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [travel, 0] }) },
-      ],
-    },
+    panelStyle: centred
+      ? {
+          opacity: progress,
+          transform: [
+            { translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [12, 0] }) },
+          ],
+        }
+      : {
+          transform: [
+            { translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [travel, 0] }) },
+          ],
+        },
   };
 }

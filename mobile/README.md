@@ -104,8 +104,9 @@ a cold-start deep link, and the web app already has password auth.
   has email confirmation switched on, you get "Check your email to confirm the
   account, then sign in"; confirm in the browser, come back, sign in. The
   `profiles` row is created on that first real sign-in.
-- **Forgotten password** — the emailed link opens `/reset-password`, one of
-  the two pages the backend still serves, in the browser.
+- **Forgotten password** — type your email and tap *Forgot password?*. The
+  emailed link opens the server's `/reset-password` page in a browser; set the
+  new password there, then sign in here.
 
 If sign-in fails, read the **CONNECTION** card at the bottom of the same
 screen. A wrong API base URL and a wrong password look identical from the
@@ -213,8 +214,9 @@ it by appending `/shared-smoke` to the URL in Expo Go's developer menu, or from
 - **HealthKit / step counts.** See below — out of scope, nothing installed.
 - **Speech recognition on the device.** It is a native module. Transcription is
   server-side instead.
-- **Push notifications**, including a rest-timer alarm. A backgrounded Expo Go
-  app will not fire one reliably, and a timer that lies is worse than a bar you
+- **Push notifications on the phone**, including a rest-timer alarm (web push
+  in a browser works — You → Connections). A backgrounded Expo Go app will not
+  fire one reliably, and a timer that lies is worse than a bar you
   have to look at. The rest timer runs off an absolute deadline, so coming back
   from a pocket shows the truth.
 
@@ -364,6 +366,28 @@ lib/          api client, auth, config, outbox adapter, haptics, query client.
 lib/shared/   one-line barrels re-exporting ../../../src/lib/domain/*.
 public/       static web assets (manifest, icons, sw.js) copied into the web export.
 ```
+
+### On a laptop
+
+The same app is the laptop UI too (Expo web). `useIsWide()` in `lib/layout.ts`
+— web AND a window at least 900px wide, never the native app — switches on:
+
+- a left sidebar with six places (Today, Lift, Food, Runs, Coach, You) instead
+  of the bottom tab bar, mounted by the root layout around the whole stack so
+  `/runs` and `/coach` stay the phone's pushed screen and modal;
+- a centred content column (max 1100px) and two-column card layouts on Today,
+  You, Food and the Lift start screen (`components/ui/Columns.tsx`);
+- `Sheet` and `NumberPad` as centred dialogs, full-screen pickers as a panel
+  (`Overlay`); Escape and a backdrop click close all of them;
+- typed weight and reps on the set card (Tab between them, Enter logs, `20kg`
+  is understood) and a typed field in the pad;
+- hover and focus states (`lib/web-styles.ts`).
+
+Any web width also gets: no mic button, "Upload photo" instead of Camera /
+Library (the same resize-and-discard path; the object URLs are revoked), and an
+outbox in `localStorage` (`lib/outbox-db.web.ts`) rather than expo-sqlite, whose
+web build needs a page-relative worker and COOP/COEP headers. Below 900px a
+browser looks like the phone app.
 
 ---
 

@@ -33,6 +33,7 @@ import {
   formatQty,
   isDirty,
   isScratchUri,
+  scratchDisposal,
   sameItems,
   saveBlockedReason,
   scaleItem,
@@ -632,5 +633,18 @@ describe("isScratchUri", () => {
     expect(isScratchUri(`${cache}../Documents/x.jpg`, cache)).toBe(false);
     expect(isScratchUri("ph://ABC-123", cache)).toBe(false);
     expect(isScratchUri(`${cache}a.jpg`, "")).toBe(false);
+  });
+});
+
+describe("scratchDisposal", () => {
+  it("deletes a phone temp file and revokes a browser object URL", () => {
+    expect(scratchDisposal("file:///var/mobile/Library/Caches/ImagePicker/a.jpg")).toBe("file");
+    expect(scratchDisposal("blob:https://lifemaxx.app/6f1c-9d2e")).toBe("blob");
+  });
+
+  it("leaves alone what there is nothing to release for", () => {
+    expect(scratchDisposal("data:image/jpeg;base64,AAAA")).toBe("none");
+    expect(scratchDisposal("ph://ABC-123")).toBe("none");
+    expect(scratchDisposal("")).toBe("none");
   });
 });

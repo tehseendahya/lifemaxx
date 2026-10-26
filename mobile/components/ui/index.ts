@@ -29,10 +29,17 @@
  * 4. NO `Alert.alert`, NO `confirm`. Use `<Sheet>`. Nothing the user does on
  *    purpose gets confirmed by a system dialog in a system typeface.
  *
- * 5. NO `TextInput` FOR NUMBERS, EVER. Use `<NumberPad>`. Not one numeric
- *    field in this app opens the system keyboard — that is the direct fix for
- *    the keyboard, tap-latency and layout-displacement complaints, and a
- *    `keyboardType="numeric"` anywhere is a regression.
+ * 5. NO `TextInput` FOR NUMBERS, EVER — ON A TOUCH SCREEN. Use `<NumberPad>`.
+ *    Not one numeric field on the phone opens the system keyboard — that is
+ *    the direct fix for the keyboard, tap-latency and layout-displacement
+ *    complaints, and a `keyboardType="numeric"` there is a regression.
+ *
+ *    The laptop is the exception, and the only one: it has a real keyboard,
+ *    and making someone click digits on a pad with a mouse is the same
+ *    complaint in reverse. So on a wide web window (`useIsWide()`) the pad's
+ *    readout is a typed field and the set card's weight and reps are typed
+ *    fields. Both are gated on that hook, which is false on every native
+ *    render.
  *
  *    A `TextInput` for *text* is fine, and there are nine of them. The rule
  *    was first written as "exactly two places" and that was wrong within a
@@ -57,13 +64,23 @@
  * `lib/haptics` in your own handler.
  *
  * Nothing here imports from outside `react-native`, `react-native-safe-area-
- * context` and `./tokens`. Keep it that way: this layer has to be usable from
- * any screen without dragging the API client, the outbox or the query cache
- * into the bundle behind it.
+ * context`, `./tokens` and `@/lib/layout` (the laptop breakpoint, which is
+ * itself `react-native` plus arithmetic). Keep it that way: this layer has to
+ * be usable from any screen without dragging the API client, the outbox or the
+ * query cache into the bundle behind it.
+ *
+ * ── ON A LAPTOP ────────────────────────────────────────────────────────────
+ *
+ * The same components serve the laptop browser (`useIsWide()` in
+ * `lib/layout.ts`). `Screen` centres its column, `Sheet` and `NumberPad`
+ * become centred dialogs, `Overlay` turns a full-screen picker into a panel,
+ * and `Columns` puts two stacks of cards side by side. Below the breakpoint,
+ * and always on the phone, every one of them renders exactly what it did.
  */
 
 export { Button } from "./Button";
 export { Card } from "./Card";
+export { Columns } from "./Columns";
 /**
  * The chart primitives. Added for the Today dashboard; `features/exercise` and
  * `features/runs` both render a trend as text today and want the same shapes.
@@ -74,6 +91,7 @@ export { Empty } from "./Empty";
 export { Label, microLabel } from "./Label";
 export { MacroBar } from "./MacroBar";
 export { NumberPad } from "./NumberPad";
+export { Overlay } from "./Overlay";
 export { Pill } from "./Pill";
 /**
  * A value against a target band. Deliberately not exported from `charts.tsx`:

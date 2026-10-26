@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
-import { Animated, Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import { Animated, Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+
+import { useIsWide } from "@/lib/layout";
 
 import { Button } from "./Button";
 import { Label } from "./Label";
-import { BACKSPACE, applyFirstKey, applyKey, displayValue, padKeys } from "./keypad";
+import { BACKSPACE, applyFirstKey, applyKey, displayValue, padKeys, typedValue } from "./keypad";
 import { color, radius, space, tnum } from "./tokens";
 import { useSlideIn } from "./useSlideIn";
 
@@ -64,6 +66,23 @@ const styles = StyleSheet.create({
   keyTextWide: { fontSize: 20 },
 
   done: { paddingHorizontal: space.lg, paddingTop: space.lg },
+
+  /** The laptop: a small centred dialog, the keys a click target under a typed field. */
+  dialogRoot: { flex: 1, justifyContent: "center", alignItems: "center", padding: space.xxl },
+  dialog: {
+    width: "100%",
+    maxWidth: 360,
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    overflow: "hidden",
+  },
+  /**
+   * The figure as a field. Same face and size as the read-only figure, so the
+   * dialog looks like the pad with a cursor in it; `minWidth: 0` and `flex: 1`
+   * so it takes the row up to the unit toggle instead of sizing to its text.
+   */
+  input: { flex: 1, minWidth: 0, padding: 0 },
+  hint: { color: color.muted, fontSize: 12, marginTop: space.xs },
 });
 
 /**
@@ -97,6 +116,16 @@ const styles = StyleSheet.create({
  * It fires no haptics, for the same reason `Button` does not: a key press, a
  * save and a cancel should not feel alike, and only the feature knows which is
  * which. Call `tapSelect()` from `onChange` and `tapSave()` from `onDone`.
+ *
+ * ── ON A LAPTOP ────────────────────────────────────────────────────────────
+ *
+ * Every complaint above is about a touch screen. On a wide web window the
+ * same pad is a centred dialog whose figure is a real, focused text field: type
+ * the number, Enter is DONE, Escape is cancel (react-native-web's `Modal`
+ * maps it to `onRequestClose`). The prefill is selected on focus, which is
+ * `applyFirstKey`'s replace-the-suggestion rule in the browser's own terms. The
+ * keys stay underneath for a mouse. What is typed goes through `typedValue`,
+ * so `onChange` still only ever sees a string the keys could have produced.
  */
 export function NumberPad({
   visible,
@@ -138,7 +167,8 @@ export function NumberPad({
   onCancel: () => void;
 }) {
   const insets = useSafeAreaInsets();
-  const { mounted, onPanelLayout, backdropStyle, panelStyle } = useSlideIn(visible);
+  const wide = useIsWide();
+  const { mounted, onPanelLayout, backdropStyle, panelStyle } = useSlideIn(visible, wide);
 
   /*
    * Reset on OPEN rather than on a change of `value`.
@@ -164,7 +194,7 @@ export function NumberPad({
 
   return (
     <Modal visible transparent animationType="none" onRequestClose={onCancel} statusBarTranslucent>
-      <View style={styles.root}>
+      <View style={wide ? styles.dialogRoot : styles.root}>
         <Pressable
           style={StyleSheet.absoluteFill}
           onPress={onCancel}
@@ -176,14 +206,38 @@ export function NumberPad({
 
         <Animated.View
           onLayout={onPanelLayout}
-          style={[styles.panel, panelStyle, { paddingBottom: insets.bottom + space.md }]}
+          style={[
+            styles.panel,
+            panelStyle,
+            wide ? [styles.dialog, { paddingBottom: space.lg }] : { paddingBottom: insets.bottom + space.md },
+          ]}
         >
           <View style={styles.readout}>
             <Label>{label}</Label>
             <View style={styles.valueRow}>
-              <Text style={[styles.value, value === "" && styles.valueEmpty]}>
-                {displayValue(value)}
-              </Text>
+              {wide ? (
+                <TextInput
+                  value={value}
+                  onChangeText={(text) => {
+                    onChange(typedValue(text, allowDecimal));
+                    // Typing is a first key too: anything clicked on the pad
+                    // after it appends rather than replacing.
+                    setReplacing(false);
+                  }}
+                  onSubmitEditing={onDone}
+                  placeholder="0"
+                  placeholderTextColor={color.muted}
+                  inputMode={allowDecimal ? "decimal" : "numeric"}
+                  autoFocus
+                  selectTextOnFocus
+                  accessibilityLabel={label}
+                  style={[styles.value, styles.input]}
+                />
+              ) : (
+                <Text style={[styles.value, value === "" && styles.valueEmpty]}>
+                  {displayValue(value)}
+                </Text>
+              )}
               {unit ? <Text style={styles.unit}>{unit}</Text> : null}
 
               {/*
@@ -227,6 +281,7 @@ export function NumberPad({
               * owner can see "44 lb" while typing against a 20 kg stack.
               */}
             {equivalent ? <Text style={styles.equivalent}>{equivalent}</Text> : null}
+            {wide ? <Text style={styles.hint}>Enter to save · Esc to cancel</Text> : null}
           </View>
 
           <View style={styles.grid}>
