@@ -31,7 +31,11 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: package-lock.json
-      - run: npm ci
+      # `npm install`, not `npm ci`, for the root: npm records the optional
+      # tailwind wasm package differently on macOS and Linux, so a lockfile
+      # written on a Mac fails `npm ci` here with "Missing ... from lock file".
+      # The lockfile still pins every version; this only tolerates that entry.
+      - run: npm install --no-audit --no-fund
       - run: npx tsc --noEmit
       # DATABASE_URL is blank on purpose: *.db.test.ts need a real Postgres, and
       # nothing in CI may ever reach the production database.
@@ -55,7 +59,7 @@ jobs:
       # The root install is required: mobile's tsc follows the `@/db/schema`
       # path into ../src/db/schema.ts, which resolves drizzle-orm from the ROOT
       # node_modules (mobile/README.md, "Sharing code").
-      - run: npm ci
+      - run: npm install --no-audit --no-fund
       - run: npm ci
         working-directory: mobile
       - run: npx tsc --noEmit
@@ -84,7 +88,7 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             mobile/package-lock.json
-      - run: npm ci
+      - run: npm install --no-audit --no-fund
       # `next build` loads modules that throw when DATABASE_URL is unset. This
       # dummy points at a closed local port, so nothing can connect. VERCEL_ENV
       # is unset, so the build never runs migrations.

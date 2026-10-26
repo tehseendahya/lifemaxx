@@ -50,7 +50,7 @@ jobs:
 
       # The root install is needed by mobile's typecheck (see ci.yml).
       - if: env.EXPO_TOKEN != ''
-        run: npm ci
+        run: npm install --no-audit --no-fund
       - if: env.EXPO_TOKEN != ''
         run: npm ci
         working-directory: mobile
