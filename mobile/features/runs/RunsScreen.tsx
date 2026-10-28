@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 
 import {
@@ -9,6 +10,7 @@ import { tapSelect } from "@/lib/haptics";
 // screen does not drag the Today screen in behind the hook.
 import { useBootstrap } from "@/features/today/useBootstrap";
 
+import { ImportRunSheet } from "./ImportRunSheet";
 import { buildRunsModel } from "./model";
 import type { RunRow, TrendNote } from "./model";
 
@@ -19,6 +21,7 @@ const styles = StyleSheet.create({
    * leaving the gap to `gap` instead of to the basis is what keeps the three
    * columns aligned between the two rows.
    */
+  import: { marginTop: space.lg },
   stats: { flexDirection: "row", flexWrap: "wrap", rowGap: space.md, columnGap: space.md },
   stat: { flexBasis: "30%", flexGrow: 1 },
 
@@ -92,6 +95,7 @@ const styles = StyleSheet.create({
  */
 export default function RunsScreen() {
   const { data, loading, error, refreshing, onRefresh, retry } = useBootstrap();
+  const [importing, setImporting] = useState(false);
 
   // Runs is pushed from Today, so in practice `bootstrap` is already cached and
   // this branch never renders. It still has to exist: deep-linking straight to
@@ -120,8 +124,17 @@ export default function RunsScreen() {
     return (
       <Screen title="Running" refreshing={refreshing} onRefresh={onRefresh}>
         <Empty>
-          No runs yet. Connect Strava under You → Connections and they arrive on the nightly pull.
+          No runs yet. Connect Strava under You → Connections and they arrive on the nightly
+          pull — or add one now from a screenshot.
         </Empty>
+        <Button size="lg" onPress={() => { tapSelect(); setImporting(true); }}>
+          ADD A RUN FROM A SCREENSHOT
+        </Button>
+        <ImportRunSheet
+          visible={importing}
+          onClose={() => setImporting(false)}
+          onImported={onRefresh}
+        />
       </Screen>
     );
   }
@@ -182,6 +195,30 @@ export default function RunsScreen() {
           </Card>
         </>
       )}
+
+      {/*
+        The free way in, under the data rather than over it.
+
+        Runs are read-only on this screen by design — you review them, you do
+        not log them — and the two syncs that fill it both cost money: a Strava
+        API application needs a Strava subscription, and the Apple Health relay
+        needs a paid tier. This is the path that costs nothing, so it sits at
+        the bottom as an escape hatch rather than at the top as the main event.
+      */}
+      <Button
+        variant="secondary"
+        size="lg"
+        style={styles.import}
+        onPress={() => { tapSelect(); setImporting(true); }}
+      >
+        ADD A RUN FROM A SCREENSHOT
+      </Button>
+
+      <ImportRunSheet
+        visible={importing}
+        onClose={() => setImporting(false)}
+        onImported={onRefresh}
+      />
     </Screen>
   );
 }
