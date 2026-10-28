@@ -208,6 +208,61 @@ A mechanical baseline has already been computed from the lifter's history and is
  */
 export const MEAL_IMAGE_DETAIL = "high" as const;
 
+/**
+ * Reading a run off a screenshot.
+ *
+ * This is transcription, not estimation, and the prompt says so repeatedly —
+ * which is the opposite of the meal prompt beside it, where the model's job IS
+ * to estimate what it cannot see. Here everything needed is printed on the
+ * image in large type, and a model that infers a plausible-looking distance
+ * from a map thumbnail has invented the one number this feature exists to
+ * capture.
+ *
+ * The unit instruction is the load-bearing one. Every running app prints a
+ * bare figure beside a unit, and miles taken for kilometres is a 61% error on
+ * every distance, pace and weekly total that follows — silently, because the
+ * wrong number is perfectly plausible. `distance_unit` is therefore a separate
+ * field that must be READ rather than assumed, and `null` when it is not on
+ * screen, so the server can refuse rather than guess.
+ *
+ * `pace_text` and `pace_unit` exist to be checked against the other two, not
+ * to be stored: `readingDisagrees` recomputes the pace from the distance and
+ * duration, and a screenshot whose three numbers do not agree is shown to the
+ * person with a warning instead of being written.
+ */
+const RUN_SHOT_SYSTEM = `You transcribe a screenshot of a recorded activity from a fitness app (Strava, Apple Fitness, Garmin, Nike Run Club, and similar).
+
+TRANSCRIBE. DO NOT ESTIMATE. Every value you return must be visibly printed on the image. If a field is not shown, return null for it. Never infer a distance from a map, a pace from a graph, or a date from context.
+
+Rules that matter most:
+- distance_unit: read the unit actually printed next to the distance — "mi", "km", or "m". Do not assume one. If no unit is visible, return null for BOTH distance and distance_unit rather than guessing. Reading miles as kilometres is the single worst mistake you can make here.
+- distance: the number as printed, without converting it.
+- duration_text: the elapsed or moving time exactly as shown, e.g. "48:20" or "1:02:30". Prefer moving time when both are shown.
+- pace_text and pace_unit: the pace exactly as printed, e.g. "7:47" with unit "km". If the screen shows speed in mph or km/h instead of a pace, return null for both.
+- started_at_text: the date and time as printed, verbatim, e.g. "October 27, 2026 at 7:02 AM" or "Yesterday at 6:14 PM". Do not normalise it.
+- activity_type: one of run, ride, walk, hike, swim, row, other — based on what the screen says it was.
+- title: the activity's name if the screen shows one, otherwise "".
+- readable: false if this is not a screenshot of a recorded activity at all, or the figures are illegible. When false, say why in note and leave the rest null or empty.
+- note: one short sentence about anything ambiguous. Empty string when everything was legible.`;
+
+/**
+ * `detail: "high"` for the same reason the meal path uses it: the numbers here
+ * are small type over a photographic background, and a downsampled read of
+ * `6.21` against a map is exactly where a decimal point goes missing.
+ */
+export function runScreenshotMessages(imageDataUrl: string): Message[] {
+  return [
+    { role: "system", content: RUN_SHOT_SYSTEM },
+    {
+      role: "user",
+      content: [
+        { type: "image_url", image_url: { url: imageDataUrl, detail: MEAL_IMAGE_DETAIL } },
+        { type: "text", text: "Transcribe this activity. Read every unit off the image." },
+      ],
+    },
+  ];
+}
+
 export function mealMessages(
   goalsText: string,
   imageDataUrl: string | undefined,

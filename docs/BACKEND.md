@@ -164,8 +164,15 @@ the user id flows through `withUser()`.
 
 ## Integrations
 
-**Strava.** There are two ways in, because as of June 2026 Strava requires an
-active subscription to create an API application.
+**Runs: three ways in,** because every automatic one costs money.
+
+As of June 2026 Strava requires an active subscription to create an API
+application. Their API policy separately bars loading API-sourced data into a
+language model's context, with Strava's own MCP Connector as the only
+sanctioned route — worth knowing before pointing the coach at it, since asking
+the coach about a run is most of the point. Data arriving through Apple Health
+or the screenshot importer did not come from Strava's API and is outside that
+policy.
 
 - *With a subscription:* create an app at
   [strava.com/settings/api](https://www.strava.com/settings/api). The
@@ -174,7 +181,22 @@ active subscription to create an API application.
   **You → Connections** in the app (phone or laptop). The OAuth `state` is
   signed with `STRAVA_STATE_SECRET`, falling back to `CRON_SECRET`.
   Activities pull nightly.
-- *Without one:* request the account archive (**Settings → My Account →
+- *Free, from the phone:* **Add a run from a screenshot** on the Running
+  screen. A vision model reads the figures off a screenshot of the run and the
+  confirmation sheet shows what will be stored; nothing is written until it is
+  accepted, and the image is never persisted (same rule as meal photos).
+  Rows land as provider `manual` under an id derived from the start minute, so
+  re-importing the same screenshot updates in place rather than giving the week
+  a run that never happened.
+
+  The hazard this path is built around is the unit. Every running app prints a
+  bare number beside a `mi` or `km`, and miles read as kilometres is a 61%
+  error on every distance, pace and weekly total downstream. So the unit is its
+  own field, the import refuses rather than guesses when it is not on screen,
+  and the distance and time are checked against the printed pace — a screen's
+  three numbers are not independent, which makes them each other's only
+  available witness inside one image. `src/lib/domain/run-import.ts`.
+- *Without a subscription, from a laptop:* request the account archive (**Settings → My Account →
   Download or Delete Your Account**), then run
   `npm run runs:import -- ~/Downloads/export_12345 --dry-run`, and again
   without `--dry-run`. Rows are keyed by Strava's activity id, the same unique
@@ -182,7 +204,12 @@ active subscription to create an API application.
   `Distance` twice (athlete units and metres), and the importer picks the
   larger, because guessing wrong is a 1000x error.
 
-**Health Auto Export.** Point the iOS app at `POST /api/webhooks/health` with
+**Health Auto Export.** The best automatic route if you would rather not pay
+Strava — but it is **not free**: that app's REST API automation is behind its
+Premium tier (seven-day trial). "Free of a Strava subscription" is not the same
+as free, and this file used to say otherwise.
+
+Point the iOS app at `POST /api/webhooks/health` with
 `Authorization: Bearer $HEALTH_WEBHOOK_SECRET`, in JSON, with **Batch Requests
 on**. That keeps payloads under Vercel's 4.5 MB limit. Overlapping windows
 resend the same workouts, so every write is an upsert. Units are read per

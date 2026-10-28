@@ -22,6 +22,36 @@ export const mealAnalysisSchema = z.object({
 });
 export type MealAnalysis = z.infer<typeof mealAnalysisSchema>;
 
+/**
+ * What a vision model is asked to read off a screenshot of a run.
+ *
+ * Every field is what the SCREEN SAYS, not what the model concluded. The units
+ * are read rather than assumed and the pace is returned as printed, because
+ * `readingDisagrees` in `domain/run-import.ts` uses the pace to check the
+ * distance — a screen prints three numbers that are not independent, and that
+ * is the only evidence inside one image that a unit was misread.
+ *
+ * Strings rather than numbers for the two clock fields: `48:20` is not a
+ * number, and asking for seconds invites the model to do arithmetic that
+ * `durationToSeconds` does exactly and testably.
+ */
+export const runScreenshotSchema = z.object({
+  readable: z.boolean(),
+  activity_type: z.string(),
+  title: z.string(),
+  distance: z.number().nullable(),
+  distance_unit: z.string().nullable(),
+  duration_text: z.string(),
+  pace_text: z.string().nullable(),
+  pace_unit: z.string().nullable(),
+  started_at_text: z.string().nullable(),
+  elevation_ft: z.number().nullable(),
+  avg_hr: z.number().nullable(),
+  kcal: z.number().nullable(),
+  note: z.string(),
+});
+export type RunScreenshot = z.infer<typeof runScreenshotSchema>;
+
 export const parsedSetsSchema = z.object({
   entries: z.array(z.object({
     exercise_query: z.string(),
@@ -92,6 +122,21 @@ export const JSON_SCHEMAS = {
       }),
     },
     confidence: num,
+    note: str,
+  }),
+  run_screenshot: obj({
+    readable: bool,
+    activity_type: str,
+    title: str,
+    distance: nullable(num),
+    distance_unit: nullable(str),
+    duration_text: str,
+    pace_text: nullable(str),
+    pace_unit: nullable(str),
+    started_at_text: nullable(str),
+    elevation_ft: nullable(num),
+    avg_hr: nullable(num),
+    kcal: nullable(num),
     note: str,
   }),
   parsed_sets: obj({

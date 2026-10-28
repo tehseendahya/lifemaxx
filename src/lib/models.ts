@@ -8,6 +8,17 @@
 export const MODELS = {
   /** Vision + portion estimation: the one genuinely hard call. */
   mealAnalyze: "gpt-5.6-terra",
+  /**
+   * Reading a run off a screenshot.
+   *
+   * Terra rather than Luna, which is the one place in this file a tier is
+   * bought rather than saved. It is the same call the meal path makes and for
+   * the same reason — small type over a photographic background — and the cost
+   * of a cheap misread is not a slightly wrong answer but a distance that is
+   * 61% wrong and permanent. Downgrade only with a screenshot set that proves
+   * it reads the units correctly.
+   */
+  runScreenshot: "gpt-5.6-terra",
   /** Text to structured sets. Narrow extraction. */
   setsParse: "gpt-5.6-luna",
   /** Mid-set questions — the one route where reasoning quality is the product. */
